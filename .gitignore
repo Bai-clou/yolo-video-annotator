@@ -1,0 +1,66 @@
+# Python and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local settings, credentials, backups and validation data
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+.agents/
+.codex-*/
+*.log
+*.tmp
+*.sqlite*
+*.db
+
+# Models and generated archives
+*.pt
+*.pth
+*.onnx
+*.engine
+*.rknn
+*.zip
+*.tar
+*.gz
+
+# Annotation workspaces and datasets
+annotation_workspace/
+_video_annotation/
+**/_video_annotation/
+uploads/
+yolo_dataset/
+datasets/
+outputs/
+runs/
+/[0-9]*/
+
+# User image/video material (the documented synthetic screenshot is allowed)
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tif
+*.tiff
+*.webp
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.m4v
+*.mts
+*.m2ts
+*.webm
+!docs/images/*.jpg
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YOLO 图片与视频标注工具</title>
+<style>
+  :root {
+    --bg: #1a1a2e; --panel: #16213e; --surface: #0f3460;
+    --accent: #e94560; --text: #eee; --text2: #aaa;
+    --green: #4caf84; --blue: #4da6ff; --red: #ff4d6a; --border: #2a3a5c;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Segoe UI','Microsoft YaHei',sans-serif;
+    background: var(--bg); color: var(--text);
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  #header {
+    background: var(--panel); padding: 8px 20px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  #header h1 { font-size: 20px; font-weight: 600; }
+  #header .dot { color: var(--accent); }
+  #header button {
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); padding: 6px 14px;
+    border-radius: 4px; cursor: pointer; font-size: 13px;
+  }
+  #header button:hover { background: var(--accent); }
+
+  #help-panel {
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    padding: 0 20px; max-height: 0; overflow: hidden;
+    transition: max-height .3s, padding .3s;
+    font-size: 13px; line-height: 1.8; color: var(--text2);
+  }
+  #help-panel.open { max-height: 260px; padding: 12px 20px; }
+  #help-panel .legend { display:flex; gap:20px; flex-wrap:wrap; margin-top:4px; }
+  #help-panel .legend span { display:inline-flex; align-items:center; gap:4px; }
+  #help-panel .swatch { display:inline-block; width:14px; height:14px; border-radius:3px; }
+  #help-panel b { color:var(--text); }
+
+  #main { display:flex; flex:1; overflow:hidden; }
+
+  #canvas-panel {
+    flex:1; background:#000; display:flex; align-items:center;
+    justify-content:center; position:relative; min-width:0;
+  }
+  canvas { cursor: crosshair; }
+  #current-file {
+    position:absolute; top:10px; left:50%; transform:translateX(-50%);
+    max-width:calc(100% - 32px); padding:6px 12px; border-radius:5px;
+    background:rgba(15,52,96,.88); border:1px solid rgba(255,255,255,.16);
+    display:flex; align-items:center; gap:8px; z-index:5; pointer-events:none;
+    font-size:13px; box-shadow:0 2px 8px rgba(0,0,0,.35);
+  }
+  #current-file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #current-status { flex-shrink:0; color:var(--text2); }
+
+  #side-panel {
+    width: 440px; background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden;
+  }
+  #side-panel .section { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  #side-panel label { font-size: 13px; color: var(--text2); margin-right: 6px; }
+  #side-panel input[type="number"] {
+    width: 60px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); padding: 4px 6px;
+    border-radius: 3px; font-size: 13px; text-align: center;
+  }
+  #side-panel .btn {
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); padding: 5px 12px;
+    border-radius: 4px; cursor: pointer; font-size: 12px; margin-left:4px;
+  }
+  #side-panel .btn:hover { background:var(--accent); }
+  #side-panel .btn.accent { background:var(--accent); border-color:var(--accent); }
+  #side-panel .btn.green { background:var(--green); border-color:var(--green); color:#000; }
+  #side-panel input[type="range"] {
+    -webkit-appearance:none; appearance:none;
+    width:100%; height:6px; background:var(--border);
+    border-radius:3px; outline:none; cursor:pointer; margin:4px 0;
+  }
+  #side-panel input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance:none; appearance:none;
+    width:16px; height:16px; border-radius:50%;
+    background:var(--accent); cursor:pointer;
+  }
+  #conf-value { color:var(--accent); font-weight:bold; }
+
+  #table-wrap { flex:1; overflow-y:auto; }
+  #table-wrap table { width:100%; border-collapse:collapse; font-size:12px; }
+  #table-wrap thead { position:sticky; top:0; z-index:1; }
+  #table-wrap th {
+    background:var(--surface); color:var(--text2); font-weight:500;
+    padding:6px 4px; text-align:center; font-size:11px;
+  }
+  #table-wrap td { padding:4px; text-align:center; border-bottom:1px solid var(--border); }
+  #table-wrap tbody tr { cursor:pointer; }
+  #table-wrap tbody tr:hover { background:rgba(255,255,255,.03); }
+  #table-wrap tbody tr.selected { background:rgba(233,69,96,.2); }
+  #table-wrap tbody tr.manual { border-left:3px solid var(--blue); }
+  #table-wrap tbody tr.auto { border-left:3px solid var(--green); }
+  #table-wrap input.cell-edit {
+    width:44px; background:var(--bg); color:var(--text);
+    border:1px solid var(--accent); padding:3px;
+    border-radius:3px; font-size:12px; text-align:center;
+  }
+  #table-wrap .del-btn {
+    background:none; color:var(--text2); border:none;
+    cursor:pointer; font-size:15px; padding:2px 5px;
+  }
+  #table-wrap .del-btn:hover { color:var(--red); }
+
+  .batch-row { padding:8px 14px; font-size:12px; color:var(--text2); }
+  .batch-row input { margin-right:4px; }
+  .box-count { font-size:12px; color:var(--text2); margin-left:8px; }
+
+  #footer {
+    background:var(--panel); border-top:1px solid var(--border);
+    padding:10px 20px; display:flex; align-items:center;
+    justify-content:space-between; flex-shrink:0;
+  }
+  #footer .nav-group { display:flex; align-items:center; gap:8px; }
+  #footer .nav-btn {
+    background:var(--surface); color:var(--text);
+    border:1px solid var(--border); padding:6px 14px;
+    border-radius:4px; cursor:pointer; font-size:13px;
+  }
+  #footer .nav-btn:hover { background:var(--accent); }
+  #footer .nav-btn:disabled { opacity:.4; cursor:not-allowed; }
+  #footer .img-label { font-size:13px; min-width:100px; text-align:center; }
+  #footer .save-group { display:flex; gap:8px; }
+  #footer .jump-group { display:flex; align-items:center; gap:6px; min-width:0; }
+  #jump-input {
+    width:min(360px,28vw); background:var(--bg); color:var(--text);
+    border:1px solid var(--border); padding:6px 9px; border-radius:4px;
+  }
+  #annotated-count { color:var(--text2); font-size:12px; white-space:nowrap; }
+
+  /* 加载中遮罩 */
+  #loading {
+    position:absolute; inset:0; background:rgba(0,0,0,.6);
+    display:none; align-items:center; justify-content:center; z-index:20;
+    font-size:18px;
+  }
+  #loading.show { display:flex; }
+
+  ::-webkit-scrollbar { width:6px; }
+  ::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+  dialog { margin:auto; width:min(760px,94vw); max-height:90vh; overflow:auto;
+    background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:12px; padding:24px; }
+  dialog::backdrop { background:rgba(0,0,0,.7); }
+  dialog h2 { font-size:20px; margin-bottom:14px; }
+  dialog p, .hint { font-size:12px; color:var(--text2); line-height:1.7; }
+  dialog textarea, dialog input[type="number"] { background:var(--bg); border:1px solid var(--border);
+    color:var(--text); padding:8px; border-radius:5px; }
+  dialog textarea { width:100%; resize:vertical; margin:8px 0; }
+  dialog input[type="number"] { width:90px; }
+  dialog label { font-size:13px; }
+  .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:16px 0; }
+  .form-grid label { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .dialog-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:18px; }
+  .action { padding:9px 15px; border-radius:5px; background:var(--surface); color:var(--text);
+    border:1px solid var(--border); cursor:pointer; }
+  .action.primary { background:var(--accent); }
+  .action:disabled { opacity:.5; cursor:wait; }
+  #video-status, #export-status { white-space:pre-wrap; font-size:13px; line-height:1.8; margin-top:14px; }
+  #video-status.error, #export-status.error { color:#ff8b9d; }
+  #notice { position:fixed; bottom:68px; left:20px; max-width:70vw; z-index:60;
+    padding:10px 16px; border:1px solid var(--green); border-radius:6px; background:var(--panel); display:none; }
+  #frame-origin { color:var(--text2); font-size:11px; white-space:nowrap; }
+  #class-legend { font-size:11px; line-height:1.8; color:var(--text2); margin-top:8px; }
+  @media(max-width:1200px) {
+    #side-panel { width:360px; } #footer { padding:8px; gap:8px; flex-wrap:wrap; }
+    #jump-input { width:150px; } #header { padding:8px 12px; gap:8px; }
+    #header h1 { font-size:16px; } #header button { padding:6px 8px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1><span class="dot">●</span> YOLO 图片与视频标注工具</h1>
+  <div>
+    <button onclick="addImages()">📁 添加图片</button>
+    <button onclick="openVideoDialog()">🎞 导入视频</button>
+    <button onclick="openExportDialog()">📦 导出图片集</button>
+    <button onclick="toggleHelp()" id="help-btn">📖 操作说明</button>
+  </div>
+</div>
+
+<div id="help-panel">
+  <b>🖱 鼠标：</b>拖拽空白=画手工框 | 单击框=选中 | 滚轮=以鼠标位置缩放 | 右键/中键拖动或空格+左键=平移 | 双击=复位<br>
+  <b>⌨ 键盘：</b>Delete=删除选中框 | Ctrl+Z=撤消手工框 | →/←=切换图片 | Ctrl+S=保存<br>
+  <b>🎞 视频：</b>导入视频 → 间隔抽帧、筛除相似画面 → 在保留帧上画框、修改鸟种 → 保存 → 导出图片和 YOLO 标签。辅助检测结果需要人工核对。<br>
+  <b>💾 保存：</b>无目标时使用“保存当前”明确保存空标签。导出仅包含已保存的图片；按视频分组划分可避免同一视频混入训练和验证集。
+  <div class="legend">
+    <span><span class="swatch" style="background:var(--green)"></span> 自动框</span>
+    <span><span class="swatch" style="background:var(--blue)"></span> 手工框</span>
+    <span><span class="swatch" style="background:var(--red)"></span> 选中框</span>
+  </div>
+</div>
+
+<div id="main">
+  <div id="canvas-panel">
+    <canvas id="canvas"></canvas>
+    <div id="current-file">
+      <span id="current-status">未加载</span>
+      <span id="current-file-name">无图片</span>
+      <span id="frame-origin"></span>
+    </div>
+    <div id="loading"><div>⏳ 加载中...</div></div>
+  </div>
+
+  <div id="side-panel">
+    <div class="section">
+      <label>预设类别 ID:</label>
+      <input type="number" id="default-class-id" value="0" min="0" max="999"
+        onchange="onDefaultClassChange()">
+      <button class="btn" onclick="applyDefaultClassToAll()">应用到已加载</button>
+      <button class="btn" onclick="applyDefaultClassToCurrent()">应用到当前</button>
+      <button class="btn accent" onclick="applyDefaultClassToSelected()">应用到选中框</button>
+      <div id="class-legend"></div>
+    </div>
+    <div class="section">
+      <label>置信度: <span id="conf-value">25</span>%</label>
+      <input type="range" id="conf-slider" min="1" max="90" value="25"
+        oninput="onConfSliderChange(this.value)">
+      <button class="btn accent" onclick="reDetectCurrent()" style="margin-top:4px;width:100%;">
+        🔄 辅助检测当前图（需人工核对）
+      </button>
+      <label class="hint"><input type="checkbox" id="auto-detect-upload"> 添加普通图片后自动辅助检测</label>
+    </div>
+    <div class="section" style="display:flex;justify-content:space-between;align-items:center;">
+      <span>检测框列表</span>
+      <span class="box-count" id="box-count">0 个框</span>
+    </div>
+    <div id="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:28px"><input type="checkbox" id="select-all" onchange="toggleSelectAll()" title="全选"></th>
+            <th>类别ID</th>
+            <th>X</th><th>Y</th><th>W</th><th>H</th>
+            <th>来源</th>
+            <th style="width:28px"></th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+    <div class="batch-row" id="batch-row" style="display:none">
+      已选 <b id="selected-count">0</b> 个框 → 统一改类别为
+      <input type="number" id="batch-class-id" value="0" min="0" style="width:60px">
+      <button class="btn accent" onclick="batchChangeClass()">应用</button>
+      <button class="btn" onclick="batchDelete()" style="color:var(--red)">批量删除</button>
+    </div>
+  </div>
+</div>
+
+<div id="footer">
+  <div class="nav-group">
+    <button class="nav-btn" onclick="navPrev()" id="btn-prev">◀ 上一张</button>
+    <span class="img-label" id="img-label">未加载</span>
+    <button class="nav-btn" onclick="navNext()" id="btn-next">下一张 ▶</button>
+  </div>
+  <div class="jump-group">
+    <span id="annotated-count">已标注 0 / 0</span>
+    <input id="jump-input" list="image-options" placeholder="输入序号或文件名跳转"
+      onkeydown="if(event.key==='Enter') jumpToImage()" onclick="this.select()">
+    <datalist id="image-options"></datalist>
+    <button class="nav-btn" onclick="jumpToImage()">跳转</button>
+  </div>
+  <div class="save-group">
+    <button class="nav-btn" onclick="saveCurrent()">💾 保存当前</button>
+    <button class="nav-btn green" onclick="saveAll()">📦 全部保存</button>
+  </div>
+</div>
+
+<input type="file" id="file-input" accept="image/*" multiple hidden>
+
+<dialog id="video-dialog">
+  <h2>导入视频并筛选标注帧</h2>
+  <p>填写本机视频文件或目录，每行一个；目录会包含子目录的视频。使用本机路径无需复制原视频。</p>
+  <textarea id="video-paths" rows="3" placeholder="D:\鸟类视频\白鹤.mp4&#10;D:\鸟类视频\新素材"></textarea>
+  <label>或选择视频文件：<input type="file" id="video-files" accept="video/*,.mts,.m2ts,.mkv" multiple></label>
+  <div class="form-grid">
+    <label>抽帧间隔（秒）<input id="frame-interval" type="number" value="2" min="0.05" step="0.5"></label>
+    <label>筛除近似帧<input id="frame-dedup" type="checkbox" checked></label>
+    <label>哈希距离上限<input id="frame-hash" type="number" value="6" min="0" max="64"></label>
+    <label>平均像素差上限<input id="frame-pixel" type="number" value="3" min="0" step="0.5"></label>
+    <label>局部像素差上限<input id="frame-tile" type="number" value="10" min="0" step="1"></label>
+    <label>最长保留间隔（秒，0 关闭）<input id="frame-gap" type="number" value="30" min="0"></label>
+    <label>开始时间（秒）<input id="frame-start" type="number" value="0" min="0" step="1"></label>
+    <label>结束时间（秒，留空到结尾）<input id="frame-end" type="number" min="0" step="1"></label>
+    <label>每视频最多保留帧数（0 不限）<input id="frame-max" type="number" value="0" min="0" step="1"></label>
+  </div>
+  <p>候选帧与上一张保留帧比较，三项差异均低于上限时才跳过。上限越小，保留越多。小鸟姿态变化可降低阈值或关闭去重；筛选不能保证保留所有有用变化。</p>
+  <div id="video-status" role="status">抽帧不会修改原视频。已提取帧和标注会保留在工作目录。</div>
+  <div class="dialog-actions">
+    <button class="action" id="video-cancel" onclick="cancelVideoJob()" hidden>停止抽帧</button>
+    <button class="action" onclick="document.getElementById('video-dialog').close()">关闭</button>
+    <button class="action primary" id="video-start" onclick="startVideoImport()">开始抽帧</button>
+  </div>
+</dialog>
+
+<dialog id="export-dialog">
+  <h2>导出已保存的标注图片集</h2>
+  <p>包含已保存的原图、视频帧和对应 YOLO TXT；未保存的帧不会进入图片集。导出图片保留原始分辨率，不含绘制的框。</p>
+  <p id="export-count"></p>
+  <div class="form-grid">
+    <label>按来源视频划分训练/验证集<input id="export-split" type="checkbox"></label>
+    <label>验证集比例<input id="export-fraction" type="number" value="0.2" min="0.01" max="0.99" step="0.05"></label>
+  </div>
+  <p>默认导出 images/、labels/ 和来源清单，暂不划分。勾选后生成标准 train/val 目录与 data.yaml；同一视频的全部帧只进入一个分区，至少需要两个独立来源。</p>
+  <div id="export-status" role="status"></div>
+  <div class="dialog-actions">
+    <button class="action" onclick="document.getElementById('export-dialog').close()">关闭</button>
+    <button class="action primary" id="export-start" onclick="exportDataset()">导出并下载 ZIP</button>
+  </div>
+</dialog>
+<div id="notice" role="status"></div>
+
+<script>
+// ============================================================
+// 全局状态
+// ============================================================
+const state = {
+  images: [],            // [{name, path, size}]
+  annotations: {},       // {name: [{id,class_id,x_center,y_center,width,height,conf,source}]}
+  saved: {},             // {name: bool}
+  dirty: new Set(),
+  classes: {},
+  loadSequence: 0,
+  currentIndex: -1,
+  defaultClassId: 0,
+  selectedBoxIds: new Set(),
+  canvasSelectedBoxId: null,
+  imgObj: null,
+  scale: 1, offsetX: 0, offsetY: 0, zoom: 1, panX: 0, panY: 0,
+  panning: false, panStart: null, spacePressed: false,
+  drawing: false, drawStart: null, drawRect: null,
+};
+const canvas = document.getElementById('canvas');
+state.ctx = canvas.getContext('2d');
+
+// ============================================================
+// 初始化 — 扫描图片目录
+// ============================================================
+
+async function init() {
+  showLoading(true);
+  try {
+    const resp = await fetch('/api/scan');
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '扫描失败');
+    state.images = data.images;
+    state.classes = data.classes;
+    for (const img of state.images) {
+      state.saved[img.name] = Boolean(img.annotated);
+    }
+    document.getElementById('class-legend').textContent = Object.entries(state.classes).sort((a,b)=>a[1]-b[1]).map(([name,id])=>`${id} ${name}`).join(' · ');
+    document.getElementById('default-class-id').max = Object.keys(state.classes).length - 1;
+    refreshImageOptions();
+    if (state.images.length > 0) {
+      await loadImage(0);
+    }
+    document.getElementById('img-label').textContent =
+      state.images.length > 0 ? `图片 1 / ${state.images.length}` : '无图片';
+  } catch (e) {
+    notice('初始化失败：' + e.message);
+  }
+  showLoading(false);
+  updateUI();
+}
+
+function showLoading(show) {
+  document.getElementById('loading').classList.toggle('show', show);
+}
+
+// ============================================================
+// Canvas 自适应
+// ============================================================
+
+function resizeCanvas() {
+  const panel = document.getElementById('canvas-panel');
+  if (panel.clientWidth > 0 && panel.clientHeight > 0) {
+    canvas.width = panel.clientWidth;
+    canvas.height = panel.clientHeight;
+  }
+  render();
+}
+window.addEventListener('resize', () => { resizeCanvas(); });
+
+// ============================================================
+// 图片加载
+// ============================================================
+
+async function loadImage(index) {
+  if (index < 0 || index >= state.images.length) return;
+  const sequence = ++state.loadSequence;
+  state.currentIndex = index;
+  state.selectedBoxIds.clear();
+  state.canvasSelectedBoxId = null;
+  state.zoom = 1;
+  state.panX = 0;
+  state.panY = 0;
+
+  const img = state.images[index];
+  try {
+    if (!Object.hasOwn(state.annotations, img.name)) {
+      const response = await fetch('/api/labels?filename=' + encodeURIComponent(img.name));
+      const labels = await response.json();
+      if (!response.ok) throw new Error(labels.error || '标签读取失败');
+      if (!Object.hasOwn(state.annotations, img.name)) {
+        state.annotations[img.name] = labels.boxes;
+        state.saved[img.name] = labels.annotated;
+      }
+    }
+    const loaded = new Image();
+    await new Promise((resolve, reject) => {
+      loaded.onload = resolve;
+      loaded.onerror = () => reject(new Error('加载失败: ' + img.name));
+      loaded.src = '/api/image?path=' + encodeURIComponent(img.path);
+    });
+    if (sequence !== state.loadSequence) return;
+    state.imgObj = loaded;
+  } catch(error) { notice(error.message); return; }
+
+  document.getElementById('jump-input').value = img.name;
+  resizeCanvas();
+  updateUI();
+}
+
+// ============================================================
+// 坐标转换
+// ============================================================
+
+function getCanvasCoords() {
+  const cw = canvas.width, ch = canvas.height;
+  const iw = state.imgObj.naturalWidth, ih = state.imgObj.naturalHeight;
+  const fit = Math.min(cw/iw, ch/ih);
+  const s = fit * state.zoom;
+  const dw = iw*s, dh = ih*s;
+  return {
+    scale:s,
+    ox:(cw-dw)/2 + state.panX,
+    oy:(ch-dh)/2 + state.panY,
+    drawW:dw,
+    drawH:dh,
+  };
+}
+
+function constrainPan() {
+  if (!state.imgObj) return;
+  if (state.zoom <= 1.0001) {
+    state.panX = 0; state.panY = 0;
+    return;
+  }
+  const cw = canvas.width, ch = canvas.height;
+  const iw = state.imgObj.naturalWidth, ih = state.imgObj.naturalHeight;
+  const fit = Math.min(cw/iw, ch/ih), dw = iw*fit*state.zoom, dh = ih*fit*state.zoom;
+  const bx = (cw-dw)/2, by = (ch-dh)/2;
+  const margin = 40;
+  state.panX = Math.max(margin-dw-bx, Math.min(cw-margin-bx, state.panX));
+  state.panY = Math.max(margin-dh-by, Math.min(ch-margin-by, state.panY));
+}
+
+function resetView() {
+  state.zoom = 1; state.panX = 0; state.panY = 0;
+  render();
+}
+
+// ============================================================
+// Canvas 渲染
+// ============================================================
+
+function render() {
+  const ctx = state.ctx;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!state.imgObj) return;
+
+  const { scale, ox, oy, drawW, drawH } = getCanvasCoords();
+  state.scale = scale; state.offsetX = ox; state.offsetY = oy;
+
+  ctx.fillStyle = '#111'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(state.imgObj, ox, oy, drawW, drawH);
+
+  const name = currentName();
+  const boxes = state.annotations[name] || [];
+  const iw = state.imgObj.naturalWidth, ih = state.imgObj.naturalHeight;
+
+  for (const box of boxes) {
+    const isSel = state.canvasSelectedBoxId === box.id || state.selectedBoxIds.has(box.id);
+    let color = box.source === 'manual' ? '#4da6ff' : '#4caf84';
+    if (isSel) color = '#ff4d6a';
+
+    const bx = box.x_center * iw * scale + ox - (box.width * iw * scale) / 2;
+    const by = box.y_center * ih * scale + oy - (box.height * ih * scale) / 2;
+    const bw = box.width * iw * scale, bh = box.height * ih * scale;
+
+    ctx.strokeStyle = color; ctx.lineWidth = isSel ? 3 : 2;
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = isSel ? 'rgba(255,77,106,.15)' :
+      (box.source === 'manual' ? 'rgba(77,166,255,.08)' : 'rgba(76,175,132,.08)');
+    ctx.fillRect(bx, by, bw, bh);
+
+    const label = `ID:${box.class_id}` + (box.conf != null ? ` ${(box.conf*100).toFixed(0)}%` : '');
+    ctx.font = 'bold 12px "Segoe UI","Microsoft YaHei",sans-serif';
+    const tm = ctx.measureText(label);
+    const lh = 18, ly = by - lh - 2 < 0 ? by + 2 : by - lh - 2;
+    ctx.fillStyle = color; ctx.fillRect(bx, ly, tm.width + 8, lh);
+    ctx.fillStyle = '#fff'; ctx.fillText(label, bx + 4, ly + 13);
+  }
+
+  if (state.drawRect) {
+    const r = state.drawRect;
+    ctx.strokeStyle = '#4da6ff'; ctx.lineWidth = 2; ctx.setLineDash([5,3]);
+    ctx.strokeRect(r.x, r.y, r.w, r.h); ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(77,166,255,.1)'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  }
+}
+
+// ============================================================
+// 鼠标交互
+// ============================================================
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (!state.imgObj) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const before = getCanvasCoords();
+  const imageX = (mx - before.ox) / before.scale;
+  const imageY = (my - before.oy) / before.scale;
+  const factor = e.deltaY > 0 ? 1/1.15 : 1.15;
+  const newZoom = Math.max(1, Math.min(8, state.zoom * factor));
+  if (newZoom === state.zoom) return;
+
+  state.zoom = newZoom;
+  const iw = state.imgObj.naturalWidth, ih = state.imgObj.naturalHeight;
+  const fit = Math.min(canvas.width/iw, canvas.height/ih);
+  const newScale = fit * state.zoom;
+  const drawW = iw * newScale, drawH = ih * newScale;
+  state.panX = mx - imageX*newScale - (canvas.width-drawW)/2;
+  state.panY = my - imageY*newScale - (canvas.height-drawH)/2;
+  constrainPan();
+  render();
+}, { passive:false });
+
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('dblclick', resetView);
+
+canvas.addEventListener('mousedown', e => {
+  if (!state.imgObj) return;
+  const rect = canvas.getBoundingClientRect();
+  const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+
+  if (e.button === 1 || e.button === 2 || (e.button === 0 && state.spacePressed)) {
+    e.preventDefault();
+    state.panning = true;
+    state.panStart = { x:cx, y:cy, panX:state.panX, panY:state.panY };
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+  if (e.button !== 0) return;
+
+  const name = currentName();
+  const boxes = state.annotations[name] || [];
+  const iw = state.imgObj.naturalWidth, ih = state.imgObj.naturalHeight;
+
+  let hitBox = null;
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    const b = boxes[i];
+    const bx = b.x_center * iw * state.scale + state.offsetX - (b.width * iw * state.scale) / 2;
+    const by = b.y_center * ih * state.scale + state.offsetY - (b.height * ih * state.scale) / 2;
+    if (cx >= bx && cx <= bx + b.width*iw*state.scale && cy >= by && cy <= by + b.height*ih*state.scale) {
+      hitBox = b; break;
+    }
+  }
+
+  if (hitBox) {
+    if (e.shiftKey) {
+      state.selectedBoxIds.has(hitBox.id) ? state.selectedBoxIds.delete(hitBox.id) : state.selectedBoxIds.add(hitBox.id);
+    } else {
+      state.selectedBoxIds.clear();
+      state.canvasSelectedBoxId = state.canvasSelectedBoxId === hitBox.id ? null : hitBox.id;
+    }
+    render(); updateTable(); return;
+  }
+
+  state.selectedBoxIds.clear(); state.canvasSelectedBoxId = null;
+  render(); updateTable();
+
+  state.drawing = true;
+  state.drawStart = { x: cx, y: cy };
+  state.drawRect = { x: cx, y: cy, w: 0, h: 0 };
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (state.panning) {
+    const rect = canvas.getBoundingClientRect();
+    const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+    state.panX = state.panStart.panX + cx - state.panStart.x;
+    state.panY = state.panStart.panY + cy - state.panStart.y;
+    constrainPan(); render(); return;
+  }
+  if (!state.drawing) return;
+  const rect = canvas.getBoundingClientRect();
+  const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+  state.drawRect = {
+    x: Math.min(state.drawStart.x, cx), y: Math.min(state.drawStart.y, cy),
+    w: Math.abs(cx - state.drawStart.x), h: Math.abs(cy - state.drawStart.y)
+  };
+  render();
+});
+
+window.addEventListener('mouseup', () => {
+  if (state.panning) {
+    state.panning = false; state.panStart = null;
+    canvas.style.cursor = state.spacePressed ? 'grab' : 'crosshair';
+    return;
+  }
+  if (!state.drawing) return;
+  state.drawing = false;
+  const r = state.drawRect; state.drawRect = null;
+  if (r.w < 5 || r.h < 5) { render(); return; }
+
+  const iw = state.imgObj.naturalWidth, ih = state.imgObj.naturalHeight;
+  const clamp = v => Math.max(0, Math.min(1, v));
+  const x1 = clamp((r.x - state.offsetX) / state.scale / iw);
+  const y1 = clamp((r.y - state.offsetY) / state.scale / ih);
+  const x2 = clamp((r.x + r.w - state.offsetX) / state.scale / iw);
+  const y2 = clamp((r.y + r.h - state.offsetY) / state.scale / ih);
+  if (x2 <= x1 || y2 <= y1) { render(); return; }
+
+  const box = {
+    id: 'm_' + crypto.randomUUID(),
+    class_id: state.defaultClassId, conf: null, source: 'manual',
+    x_center: (x1+x2)/2, y_center: (y1+y2)/2,
+    width: x2-x1, height: y2-y1,
+  };
+
+  const name = currentName();
+  state.annotations[name].push(box);
+  markDirty(name);
+  render(); updateTable();
+});
+
+// ============================================================
+// 键盘
+// ============================================================
+
+document.addEventListener('keydown', e => {
+  const editing = ['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName) || e.target.isContentEditable;
+  if (e.code === 'Space' && !editing) {
+    state.spacePressed = true;
+    canvas.style.cursor = 'grab';
+    e.preventDefault();
+  }
+  if (editing) return;
+  if (!state.imgObj) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (state.canvasSelectedBoxId) { del(state.canvasSelectedBoxId); state.canvasSelectedBoxId = null; }
+    else if (state.selectedBoxIds.size > 0) {
+      for (const id of state.selectedBoxIds) del(id);
+      state.selectedBoxIds.clear();
+    }
+    render(); updateTable(); return;
+  }
+  if (e.key === 'ArrowRight' || e.key === 'n') { e.preventDefault(); navNext(); return; }
+  if (e.key === 'ArrowLeft' || e.key === 'p') { e.preventDefault(); navPrev(); return; }
+  if ((e.ctrlKey||e.metaKey) && e.key === 's') { e.preventDefault(); saveCurrent(); return; }
+  if ((e.ctrlKey||e.metaKey) && e.key === 'z') {
+    e.preventDefault();
+    const name = currentName();
+    const boxes = state.annotations[name] || [];
+    for (let i = boxes.length-1; i >= 0; i--) {
+      if (boxes[i].source === 'manual') { boxes.splice(i,1); markDirty(name); render(); updateTable(); break; }
+    }
+  }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'Space') {
+    state.spacePressed = false;
+    if (!state.panning) canvas.style.cursor = 'crosshair';
+  }
+});
+
+// ============================================================
+// 框操作
+// ============================================================
+
+function del(boxId) {
+  const name = currentName();
+  const boxes = state.annotations[name] || [];
+  const i = boxes.findIndex(b => b.id === boxId);
+  if (i >= 0) { boxes.splice(i,1); markDirty(name); state.selectedBoxIds.delete(boxId); }
+}
+
+function currentName() {
+  return state.currentIndex >= 0 ? state.images[state.currentIndex]?.name : null;
+}
+
+// ============================================================
+// 表格
+// ============================================================
+
+function updateTable() {
+  const tbody = document.getElementById('table-body');
+  const name = currentName();
+  const boxes = state.annotations[name] || [];
+  document.getElementById('box-count').textContent = boxes.length + ' 个框';
+  document.getElementById('select-all').checked = false;
+
+  let html = '';
+  for (const b of boxes) {
+    const checked = state.selectedBoxIds.has(b.id) || state.canvasSelectedBoxId === b.id;
+    const srcLabel = b.source === 'manual' ? '🔵 手工' : `🟢 ${b.conf?(b.conf*100).toFixed(0)+'%':''}`;
+    const cls = state.canvasSelectedBoxId === b.id ? 'selected' : (b.source === 'manual' ? 'manual' : 'auto');
+
+    html += `<tr class="${cls}" onclick="rowClick('${b.id}')">
+      <td><input type="checkbox" ${checked?'checked':''} onclick="cbClick('${b.id}',event)"></td>
+      <td><input type="text" inputmode="numeric" class="cell-edit" value="${b.class_id}"
+        onfocus="this.select()" onclick="event.stopPropagation()"
+        onkeydown="if(!/[0-9]|Backspace|Delete|Tab|ArrowLeft|ArrowRight/.test(event.key)) event.preventDefault()"
+        onchange="setBoxClass('${b.id}',this.value)"></td>
+      <td>${b.x_center.toFixed(4)}</td><td>${b.y_center.toFixed(4)}</td>
+      <td>${b.width.toFixed(4)}</td><td>${b.height.toFixed(4)}</td>
+      <td style="font-size:11px">${srcLabel}</td>
+      <td><button class="del-btn" onclick="event.stopPropagation();del('${b.id}');render();updateTable()" title="删除">✕</button></td>
+    </tr>`;
+  }
+  tbody.innerHTML = html || '<tr><td colspan="8" style="color:#555;padding:20px;">无检测框</td></tr>';
+
+  const selCount = state.selectedBoxIds.size + (state.canvasSelectedBoxId ? 1 : 0);
+  const br = document.getElementById('batch-row');
+  br.style.display = selCount > 1 ? 'block' : 'none';
+  document.getElementById('selected-count').textContent = selCount;
+
+  if (name) {
+    document.getElementById('current-status').textContent = state.saved[name] ? '✅ 已标注' : '○ 未标注';
+  }
+  const annotated = state.images.filter(img => state.saved[img.name]).length;
+  document.getElementById('annotated-count').textContent = `已标注 ${annotated} / ${state.images.length}`;
+}
+
+function rowClick(boxId) {
+  state.canvasSelectedBoxId = state.canvasSelectedBoxId === boxId ? null : boxId;
+  state.selectedBoxIds.delete(boxId);
+  render(); updateTable();
+}
+function cbClick(boxId, e) {
+  e.stopPropagation();
+  if (state.selectedBoxIds.has(boxId)) state.selectedBoxIds.delete(boxId);
+  else { state.selectedBoxIds.add(boxId); state.canvasSelectedBoxId = null; }
+  updateTable(); render();
+}
+function toggleSelectAll() {
+  const ck = document.getElementById('select-all').checked;
+  state.selectedBoxIds.clear(); state.canvasSelectedBoxId = null;
+  if (ck) for (const b of (state.annotations[currentName()]||[])) state.selectedBoxIds.add(b.id);
+  render(); updateTable();
+}
+function batchChangeClass() {
+  const nid = parseInt(document.getElementById('batch-class-id').value) || 0;
+  const name = currentName();
+  const ids = new Set([...state.selectedBoxIds]);
+  if (state.canvasSelectedBoxId) ids.add(state.canvasSelectedBoxId);
+  for (const b of (state.annotations[name]||[])) { if (ids.has(b.id)) b.class_id = nid; }
+  markDirty(name); render(); updateTable();
+}
+function batchDelete() {
+  const ids = new Set([...state.selectedBoxIds]);
+  if (state.canvasSelectedBoxId) ids.add(state.canvasSelectedBoxId);
+  for (const id of ids) del(id);
+  state.canvasSelectedBoxId = null; state.selectedBoxIds.clear();
+  render(); updateTable();
+}
+
+// ============================================================
+// 预设类别 & 置信度
+// ============================================================
+
+function onDefaultClassChange() {
+  state.defaultClassId = parseInt(document.getElementById('default-class-id').value) || 0;
+}
+function setBoxClass(id, value) {
+  const number = Number(value);
+  if (!Object.values(state.classes).includes(number)) { notice('类别 ID 不在类别表中'); updateTable(); return; }
+  const box = (state.annotations[currentName()] || []).find(item => item.id === id);
+  if (box) { box.class_id = number; markDirty(); render(); updateTable(); }
+}
+function applyDefaultClassToAll() {
+  for (const [n, boxes] of Object.entries(state.annotations)) {
+    for (const b of boxes) b.class_id = state.defaultClassId;
+    markDirty(n);
+  }
+  render(); updateTable();
+}
+function applyDefaultClassToCurrent() {
+  const name = currentName();
+  for (const b of (state.annotations[name]||[])) b.class_id = state.defaultClassId;
+  markDirty(name);
+  render(); updateTable();
+}
+function applyDefaultClassToSelected() {
+  const name = currentName();
+  const ids = new Set([...state.selectedBoxIds]);
+  if (state.canvasSelectedBoxId) ids.add(state.canvasSelectedBoxId);
+  if (ids.size === 0) { alert('请先在 Canvas 单击框 或 表格勾选框来选中目标'); return; }
+  for (const b of (state.annotations[name]||[])) {
+    if (ids.has(b.id)) b.class_id = state.defaultClassId;
+  }
+  markDirty(name);
+  render(); updateTable();
+}
+function onConfSliderChange(v) { document.getElementById('conf-value').textContent = v; }
+function getConf() { return (parseInt(document.getElementById('conf-slider').value)||25) / 100; }
+
+async function reDetectCurrent() {
+  const name = currentName(); if (!name) return;
+  const conf = getConf();
+  try {
+    const resp = await fetch('/api/detect', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ filename: name, default_class_id: state.defaultClassId, conf })
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '检测失败');
+    const manual = (state.annotations[name]||[]).filter(b => b.source === 'manual');
+    state.annotations[name] = [...data.detections, ...manual];
+    markDirty(name);
+    state.selectedBoxIds.clear(); state.canvasSelectedBoxId = null;
+    render(); updateTable();
+  } catch(e) { alert('重新检测失败: '+e.message); }
+}
+
+// ============================================================
+// 导航
+// ============================================================
+
+function navNext() { if (state.currentIndex < state.images.length-1) loadImage(state.currentIndex+1); }
+function navPrev() { if (state.currentIndex > 0) loadImage(state.currentIndex-1); }
+
+function refreshImageOptions() {
+  const list = document.getElementById('image-options');
+  list.replaceChildren();
+  state.images.forEach((img, index) => {
+    const option = document.createElement('option');
+    option.value = img.name;
+    option.label = `${index+1} · ${state.saved[img.name] ? '✅ 已标注' : '○ 未标注'}`;
+    list.appendChild(option);
+  });
+}
+
+function jumpToImage() {
+  const input = document.getElementById('jump-input');
+  const value = input.value.trim();
+  if (!value) { input.focus(); return; }
+
+  let index = -1;
+  if (/^\d+$/.test(value)) {
+    const number = Number(value);
+    if (number >= 1 && number <= state.images.length) index = number - 1;
+  } else {
+    const lower = value.toLocaleLowerCase();
+    index = state.images.findIndex(img => img.name.toLocaleLowerCase() === lower);
+    if (index < 0) index = state.images.findIndex(img => img.name.toLocaleLowerCase().includes(lower));
+  }
+
+  if (index < 0) {
+    alert(`没有找到图片：${value}`);
+    input.select();
+    return;
+  }
+  loadImage(index);
+}
+
+// ============================================================
+// 保存
+// ============================================================
+
+async function saveCurrent() {
+  const name = currentName(); if (!name) return;
+  if (!(state.annotations[name] || []).length && !confirm('确认当前图片没有需要标注的目标？将保存空 TXT 作为无目标样本。')) return;
+  try {
+    await doSave({ [name]: state.annotations[name] || [] });
+    state.saved[name] = true;
+    state.dirty.delete(name);
+    const img = state.images.find(i => i.name === name); if (img) img.annotated = true;
+    refreshImageOptions(); updateUI();
+    notice('已保存' + ((state.annotations[name] || []).length ? '' : '（无目标空标签）'));
+  } catch(e) { alert('保存失败: ' + e.message); }
+}
+async function saveAll() {
+  const toSave = {};
+  for (const [n, boxes] of Object.entries(state.annotations)) {
+    if (!state.saved[n] && (boxes.length > 0 || state.dirty.has(n))) toSave[n] = boxes;
+  }
+  if (Object.values(toSave).some(boxes => !boxes.length) && !confirm('包含已清空所有框的图片，确认将这些图片保存为无目标空标签？')) return;
+  if (!Object.keys(toSave).length) { alert('无标注可保存'); return; }
+  try {
+    await doSave(toSave);
+    for (const n of Object.keys(toSave)) {
+      state.saved[n] = true;
+      state.dirty.delete(n);
+      const img = state.images.find(i => i.name === n); if (img) img.annotated = true;
+    }
+    refreshImageOptions();
+    updateUI();
+    notice(`全部保存完成，共 ${Object.keys(toSave).length} 张`);
+  } catch(e) { alert('保存失败: ' + e.message); }
+}
+async function doSave(data) {
+  const resp = await fetch('/api/save', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ annotations: data })
+  });
+  const result = await resp.json();
+  if (!resp.ok) throw new Error(result.error || `HTTP ${resp.status}`);
+  return result;
+}
+
+// ============================================================
+// 添加图片（上传到工作目录）
+// ============================================================
+
+const fileInput = document.getElementById('file-input');
+fileInput.addEventListener('change', () => addFiles(fileInput.files));
+
+function addImages() { fileInput.click(); }
+
+async function addFiles(fileList) {
+  if (!fileList || !fileList.length) return;
+  const fd = new FormData();
+  for (const f of fileList) fd.append('images', f);
+  try {
+    showLoading(true);
+    const resp = await fetch('/api/upload', { method:'POST', body: fd });
+    const data = await resp.json();
+    if (data.error) { alert(data.error); return; }
+    // 追加并检测
+    for (const img of data.images) {
+      state.images.push(img);
+      state.saved[img.name] = Boolean(img.annotated);
+    }
+    refreshImageOptions();
+    if (document.getElementById('auto-detect-upload').checked) await detectAll(data.images.map(i => i.name));
+    if (state.currentIndex < 0 && state.images.length > 0) await loadImage(0);
+    updateUI();
+  } catch(e) { alert('添加失败: '+e.message); }
+  showLoading(false);
+}
+
+async function detectAll(filenames) {
+  try {
+    const resp = await fetch('/api/detect-all', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ filenames, default_class_id: state.defaultClassId, conf: getConf() })
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '辅助检测失败');
+    for (const [n, boxes] of Object.entries(data.results)) { state.annotations[n] = boxes; markDirty(n); }
+  } catch(e) { notice('辅助检测失败，可继续手工标注：' + e.message); }
+}
+
+// ============================================================
+// UI
+// ============================================================
+
+function updateUI() {
+  const hasImg = state.images.length > 0 && state.imgObj;
+  const idx = state.currentIndex;
+  const name = currentName();
+  document.getElementById('img-label').textContent =
+    hasImg ? `图片 ${idx+1} / ${state.images.length}` : '无图片';
+  document.getElementById('current-file-name').textContent = hasImg ? name : '无图片';
+  document.getElementById('current-file-name').title = hasImg ? name : '';
+  const origin = hasImg ? state.images[idx].origin : null;
+  document.getElementById('frame-origin').textContent = origin ? `${origin.timestamp_seconds.toFixed(2)} 秒 · 第 ${origin.frame_index} 帧` : '';
+  document.getElementById('current-status').textContent =
+    hasImg ? (state.saved[name] ? '✅ 已标注' : '○ 未标注') : '未加载';
+  const annotated = state.images.filter(img => state.saved[img.name]).length;
+  document.getElementById('annotated-count').textContent = `已标注 ${annotated} / ${state.images.length}`;
+  document.getElementById('btn-prev').disabled = idx <= 0;
+  document.getElementById('btn-next').disabled = idx >= state.images.length - 1;
+  document.getElementById('default-class-id').value = state.defaultClassId;
+  updateTable();
+}
+function toggleHelp() { document.getElementById('help-panel').classList.toggle('open'); }
+
+function markDirty(name=currentName()) {
+  if (name) { state.saved[name] = false; state.dirty.add(name); }
+}
+let noticeTimer;
+function notice(message) {
+  const element = document.getElementById('notice');
+  element.textContent = message; element.style.display = 'block';
+  clearTimeout(noticeTimer); noticeTimer = setTimeout(()=>element.style.display='none',6000);
+}
+window.addEventListener('beforeunload', event => {
+  if (state.dirty.size) { event.preventDefault(); event.returnValue = ''; }
+});
+
+// Video extraction runs in the background; retained frames are registered on disk.
+let videoJobId = null, videoPollTimer = null;
+function videoStatus(text, error=false) {
+  const element = document.getElementById('video-status');
+  element.textContent = text; element.classList.toggle('error', error);
+}
+async function openVideoDialog() {
+  document.getElementById('video-dialog').showModal();
+  if (videoJobId) return;
+  try {
+    const response = await fetch('/api/videos/jobs');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '历史任务读取失败');
+    const active = data.jobs.find(job => ['queued','running'].includes(job.status));
+    if (active) { videoJobId=active.id; setVideoBusy(true); pollVideoJob(); }
+    else if (data.jobs.length) {
+      const jobs = data.jobs;
+      videoStatus(`历史抽帧任务 ${jobs.length} 个，累计保留 ${jobs.reduce((total,job)=>total+job.kept,0)} 张。\n已保存的帧与标注已自动加载，可继续标注。`);
+    }
+  } catch(error) { videoStatus(error.message,true); }
+}
+function setVideoBusy(busy) {
+  document.getElementById('video-start').disabled = busy;
+  document.getElementById('video-cancel').hidden = !busy;
+}
+async function startVideoImport() {
+  if (videoJobId) return;
+  const number = id => Number(document.getElementById(id).value);
+  const options = {
+    interval:number('frame-interval'), dedup:document.getElementById('frame-dedup').checked,
+    hash_distance:number('frame-hash'), pixel_difference:number('frame-pixel'),
+    tile_difference:number('frame-tile'), max_gap:number('frame-gap'),
+    start:number('frame-start'), end:document.getElementById('frame-end').value === '' ? null : number('frame-end'),
+    max_frames:number('frame-max'),
+  };
+  const form = new FormData();
+  form.append('options', JSON.stringify(options));
+  form.append('paths', document.getElementById('video-paths').value);
+  for (const file of document.getElementById('video-files').files) form.append('videos',file);
+  try {
+    setVideoBusy(true); videoStatus('正在提交视频；使用上传方式时请等待文件传输完成…');
+    const response = await fetch('/api/videos/import', {method:'POST',body:form});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '视频导入失败');
+    videoJobId = data.id;
+    pollVideoJob();
+  } catch(error) { videoStatus(error.message,true); setVideoBusy(false); }
+}
+async function pollVideoJob() {
+  clearTimeout(videoPollTimer);
+  if (!videoJobId) return;
+  try {
+    const response = await fetch('/api/videos/jobs/'+videoJobId);
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.error || '任务读取失败');
+    const current = job.current || {};
+    const completedSampled = job.videos.reduce((sum,video)=>sum+video.sampled,0);
+    const completedSkipped = job.videos.reduce((sum,video)=>sum+video.duplicates,0);
+    const inProgress = job.video_index > job.videos.length;
+    const sampled = completedSampled + (inProgress ? (current.sampled||0) : 0);
+    const skipped = completedSkipped + (inProgress ? (current.duplicates||0) : 0);
+    const progress = current.total_frames ? ` · 读取 ${Math.min(100,Math.round((current.decoded||0)/current.total_frames*100))}%` : '';
+    videoStatus(`${job.stage}${progress}\n候选 ${sampled} 张 · 筛除近似帧 ${skipped} 张 · 保留 ${job.kept} 张` +
+      (current.phase==='fingerprint' ? `\n正在读取视频指纹 ${Math.round((current.fingerprint_bytes||0)/Math.max(1,current.source_bytes)*100)}%` : '') +
+      (current.timestamp != null ? `\n当前视频时间 ${current.timestamp.toFixed(1)} 秒` : '') +
+      (job.videos.some(video=>video.limited) ? '\n部分视频达到设置的帧数上限。' : '') +
+      (job.videos.some(video=>video.duplicate_video) ? '\n已跳过本批次内容完全相同的视频副本。' : '') +
+      (job.error ? '\n'+job.error : ''), job.status==='failed');
+    if (['completed','failed','cancelled'].includes(job.status)) {
+      setVideoBusy(false); videoJobId=null;
+      const added = await refreshImages();
+      if (added) notice(`已加入 ${added} 张视频帧，可关闭窗口开始标注`);
+      return;
+    }
+    videoPollTimer=setTimeout(pollVideoJob,1000);
+  } catch(error) {
+    videoStatus(error.message+'；可关闭并重新打开窗口查看任务。',true);
+    videoJobId=null; setVideoBusy(false);
+  }
+}
+async function cancelVideoJob() {
+  if (!videoJobId) return;
+  try {
+    const response = await fetch('/api/videos/jobs/'+videoJobId+'/cancel', {method:'POST'});
+    if (!response.ok) throw new Error('停止请求失败');
+    videoStatus('正在停止，已提取图片会保留…');
+  } catch(error) { videoStatus(error.message,true); }
+}
+async function refreshImages() {
+  const response = await fetch('/api/scan');
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '图片列表读取失败');
+  const known = new Set(state.images.map(image=>image.name));
+  const additions = data.images.filter(image=>!known.has(image.name));
+  for (const image of additions) { state.images.push(image); state.saved[image.name]=image.annotated; }
+  refreshImageOptions();
+  if (state.currentIndex < 0 && state.images.length) await loadImage(0);
+  updateUI();
+  return additions.length;
+}
+function openExportDialog() {
+  document.getElementById('export-count').textContent = `已保存 ${state.images.filter(image=>state.saved[image.name]).length} 张；未保存修改 ${state.dirty.size} 张。`;
+  document.getElementById('export-status').textContent = '';
+  document.getElementById('export-dialog').showModal();
+}
+async function exportDataset() {
+  const status = document.getElementById('export-status');
+  status.classList.remove('error');
+  if (state.dirty.size) { status.textContent='请先关闭窗口，保存已修改的标注，再导出图片集。'; status.classList.add('error'); return; }
+  const button=document.getElementById('export-start');
+  button.disabled=true; status.textContent='正在整理已保存的图片与标签…';
+  try {
+    const response = await fetch('/api/export', {method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({val_fraction:document.getElementById('export-split').checked ? Number(document.getElementById('export-fraction').value) : 0})});
+    const data=await response.json();
+    if (!response.ok) throw new Error(data.error || '导出失败');
+    status.textContent=`已导出 ${data.count} 张，来源分组 ${data.groups} 个。\n`+
+      Object.entries(data.splits).map(([name,count])=>`${name}：${count} 张`).join(' · ')+`\n本地 ZIP：${data.path}`;
+    const link=document.createElement('a'); link.href=data.download_url; link.textContent='再次下载图片集';
+    status.append(document.createElement('br'),link); link.click();
+  } catch(error) { status.textContent=error.message; status.classList.add('error'); }
+  finally { button.disabled=false; }
+}
+
+// ============================================================
+// 启动
+// ============================================================
+setTimeout(resizeCanvas, 100);
+init();
+</script>
+</body>
+</html>

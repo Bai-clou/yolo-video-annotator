@@ -1,0 +1,6 @@
+Flask>=3,<4
+opencv-python>=4.8
+numpy>=1.24
+Pillow>=10
+PyYAML>=6
+# Optional assisted detection uses the existing Torch + Ultralytics environment.
