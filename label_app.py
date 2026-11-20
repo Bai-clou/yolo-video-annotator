@@ -5,13 +5,16 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import json
 import math
+import os
 from pathlib import Path
+import secrets
 import threading
 import time
 import uuid
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, has_request_context, jsonify, render_template, request, send_file, session
 from PIL import Image
+from urllib.parse import unquote
 
 from video_frames import (FrameOptions, VIDEO_EXTENSIONS, WORK_FOLDER, atomic_json,
                           export_dataset, extract_video, read_manifest)
@@ -26,6 +29,8 @@ SOURCE_DIR = ROOT
 OUTPUT_DIR = None
 CLASSES = json.loads((ROOT / 'classes.json').read_text(encoding='utf-8-sig'))
 app = Flask(__name__)
+app.secret_key = secrets.token_bytes(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 ** 3
 _model = None
 _model_lock = threading.Lock()
@@ -38,8 +43,24 @@ _ai_stores_lock = threading.Lock()
 _ai_jobs = JobManager()
 
 
+def source_dir():
+    return Path(session.get('annotation_source', SOURCE_DIR)).resolve() if has_request_context() else SOURCE_DIR.resolve()
+
+
+def output_dir():
+    # A newly opened folder must not write labels into the startup --output directory.
+    return None if has_request_context() and 'annotation_source' in session else OUTPUT_DIR
+
+
+@app.before_request
+def check_workspace():
+    expected = request.headers.get('X-Annotation-Source')
+    if expected and unquote(expected) != str(source_dir()):
+        return jsonify(error='工作目录已在其他页面切换，请先保存原页面草稿或刷新页面'), 409
+
+
 def ai_store():
-    path = SOURCE_DIR.resolve() / '.ai-config.json'
+    path = source_dir() / '.ai-config.json'
     with _ai_stores_lock:
         if path not in _ai_stores:
             _ai_stores[path] = ai_annotation.ConfigStore(path)
@@ -57,7 +78,7 @@ def get_model():
 
 
 def workspace():
-    path = SOURCE_DIR / WORK_FOLDER
+    path = source_dir() / WORK_FOLDER
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -67,10 +88,10 @@ def get_image_path(filename):
         return None
     path = Path(filename)
     if not path.is_absolute():
-        path = SOURCE_DIR / path
+        path = source_dir() / path
     path = path.resolve()
     try:
-        path.relative_to(SOURCE_DIR.resolve())
+        path.relative_to(source_dir())
     except ValueError:
         return None
     if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
@@ -79,18 +100,18 @@ def get_image_path(filename):
 
 
 def image_name(path):
-    return path.resolve().relative_to(SOURCE_DIR.resolve()).as_posix()
+    return path.resolve().relative_to(source_dir()).as_posix()
 
 
 def is_video_frame(path):
-    relative = path.resolve().relative_to(SOURCE_DIR.resolve())
+    relative = path.resolve().relative_to(source_dir())
     return len(relative.parts) == 4 and relative.parts[0] == WORK_FOLDER and relative.parts[2] == 'images'
 
 
 def label_candidates(path):
     if is_video_frame(path):
         return [path.parent.parent / 'labels' / (path.stem + '.txt')]
-    base = OUTPUT_DIR or path.parent
+    base = output_dir() or path.parent
     direct = base / (path.stem + '.txt')
     # Only numeric category directories are legacy annotation directories.
     nested = sorted(p / (path.stem + '.txt') for p in base.iterdir()
@@ -152,8 +173,16 @@ def describe_image(path, origin=None):
 
 
 def scan_images(directory):
-    images = [describe_image(p) for p in sorted(Path(directory).iterdir())
-              if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS]
+    if has_request_context() and session.get('annotation_recursive', False):
+        candidates = []
+        for base, folders, names in os.walk(directory, followlinks=False):
+            folders[:] = sorted(name for name in folders if not name.startswith('.')
+                                and name not in (WORK_FOLDER, '__pycache__', 'venv', 'env'))
+            candidates.extend(Path(base) / name for name in sorted(names) if Path(name).suffix.lower() in IMAGE_EXTENSIONS)
+    else:
+        candidates = sorted(Path(directory).iterdir())
+    images = [describe_image(p) for p in candidates
+              if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS and get_image_path(str(p))]
     work = Path(directory) / WORK_FOLDER
     if work.exists():
         for manifest in sorted(work.glob('*/frames.jsonl')):
@@ -188,8 +217,58 @@ def index():
 
 @app.get('/api/scan')
 def api_scan():
-    images = scan_images(SOURCE_DIR)
-    return jsonify(images=images, source_dir=str(SOURCE_DIR.resolve()), count=len(images), classes=CLASSES)
+    images = scan_images(source_dir())
+    return jsonify(images=images, source_dir=str(source_dir()), count=len(images), classes=CLASSES,
+                   recursive=session.get('annotation_recursive', False))
+
+
+@app.post('/api/source')
+def api_open_source():
+    data = json_body()
+    value, recursive = data.get('path'), data.get('recursive', True)
+    if not isinstance(value, str) or not value.strip() or len(value) > 4096 or '\0' in value:
+        raise ValueError('请选择或填写本机图片目录')
+    if type(recursive) is not bool:
+        raise ValueError('包含子目录设置应为布尔值')
+    try:
+        path = Path(value.strip().strip('"')).expanduser().resolve()
+        if not path.is_dir():
+            raise ValueError('图片目录不存在，请选择已有文件夹')
+        with os.scandir(path) as entries:
+            next(entries, None)
+    except OSError:
+        raise ValueError('无法读取该目录，请检查目录路径和访问权限') from None
+    # Flask loads a separate session snapshot for each request. Existing workers capture their root.
+    previous = dict(session)
+    session.update(annotation_source=str(path), annotation_recursive=recursive)
+    try:
+        images = scan_images(path)
+    except (ValueError, OSError) as error:
+        session.clear()
+        session.update(previous)
+        raise ValueError('打开目录失败：' + str(error)) from None
+    return jsonify(source_dir=str(path), count=len(images), recursive=recursive)
+
+
+@app.get('/api/folders')
+def api_browse_folders():
+    value = request.args.get('path', '')
+    if len(value) > 4096 or '\0' in value:
+        raise ValueError('目录路径无效')
+    try:
+        path = Path(value).expanduser().resolve() if value else source_dir()
+        if not path.is_dir():
+            raise ValueError('目录不存在，请检查路径')
+        with os.scandir(path) as entries:
+            folders = sorted(({'name': entry.name, 'path': str(Path(entry.path).resolve())}
+                              for entry in entries if entry.is_dir() and not entry.name.startswith('.')),
+                             key=lambda entry: entry['name'].casefold())
+    except OSError:
+        raise ValueError('无法浏览该目录，请检查访问权限或填写其他目录路径') from None
+    drives = [str(Path(f'{letter}:\\')) for letter in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+              if Path(f'{letter}:\\').is_dir()] if os.name == 'nt' else ['/']
+    return jsonify(path=str(path), parent=str(path.parent) if path.parent != path else None,
+                   folders=folders, drives=drives)
 
 
 @app.post('/api/upload')
@@ -199,9 +278,9 @@ def api_upload():
         name = Path(upload.filename.replace('\\', '/')).name
         if Path(name).suffix.lower() not in IMAGE_EXTENSIONS:
             continue
-        destination = SOURCE_DIR / name
+        destination = source_dir() / name
         if destination.exists():
-            destination = SOURCE_DIR / f'{Path(name).stem}_{uuid.uuid4().hex[:8]}{Path(name).suffix}'
+            destination = source_dir() / f'{Path(name).stem}_{uuid.uuid4().hex[:8]}{Path(name).suffix}'
         # Decode before saving; uploads cannot create unreadable image entries.
         with Image.open(upload.stream) as image:
             image.verify()
@@ -325,7 +404,7 @@ def api_ai_start_job():
         raise ValueError('当前图片超过 1000 个框，请分批处理')
     history = ai_annotation.clean_history(data.get('history', []))
     config, key = ai_store().snapshot()
-    classes, filename, root = dict(CLASSES), image_name(path), str(SOURCE_DIR.resolve())
+    classes, filename, root = dict(CLASSES), image_name(path), str(source_dir())
     request_id = data.get('request_id', uuid.uuid4().hex)
     if not isinstance(request_id, str) or not 1 <= len(request_id) <= 80:
         raise ValueError('请求编号无效')
@@ -342,24 +421,24 @@ def api_ai_start_job():
 
 @app.get('/api/ai/jobs')
 def api_ai_pending_jobs():
-    return jsonify(jobs=_ai_jobs.pending(str(SOURCE_DIR.resolve())))
+    return jsonify(jobs=_ai_jobs.pending(str(source_dir())))
 
 
 @app.get('/api/ai/jobs/<identifier>')
 def api_ai_job(identifier):
-    job = _ai_jobs.get(str(SOURCE_DIR.resolve()), identifier)
+    job = _ai_jobs.get(str(source_dir()), identifier)
     return jsonify(job) if job else (jsonify(error='后台任务不存在或服务已重启；已保存标签不受影响'), 404)
 
 
 @app.post('/api/ai/jobs/<identifier>/cancel')
 def api_ai_cancel_job(identifier):
-    job = _ai_jobs.cancel(str(SOURCE_DIR.resolve()), identifier)
+    job = _ai_jobs.cancel(str(source_dir()), identifier)
     return jsonify(job) if job else (jsonify(error='后台任务不存在'), 404)
 
 
 @app.post('/api/ai/jobs/<identifier>/ack')
 def api_ai_ack_job(identifier):
-    acknowledged = _ai_jobs.acknowledge(str(SOURCE_DIR.resolve()), identifier)
+    acknowledged = _ai_jobs.acknowledge(str(source_dir()), identifier)
     return jsonify(ok=True) if acknowledged else (jsonify(error='后台任务不存在'), 404)
 
 
@@ -380,7 +459,7 @@ def api_save():
             counts = {}
             for box in boxes:
                 counts[box['class_id']] = counts.get(box['class_id'], 0) + 1
-            base = OUTPUT_DIR or path.parent
+            base = output_dir() or path.parent
             target = base / str(max(counts, key=counts.get)) / (path.stem + '.txt') if counts else base / (path.stem + '.txt')
         prepared.append((name, path, target, box_text(boxes)))
     saved = []
@@ -402,7 +481,7 @@ def public_job(job):
     return {key: value for key, value in job.items() if not key.startswith('_')}
 
 
-def run_video_job(job_id, directory, sources, options):
+def run_video_job(job_id, directory, sources, options, root):
     with _jobs_lock:
         job = _jobs[job_id]
         job.update(status='running', stage='开始读取视频')
@@ -423,7 +502,7 @@ def run_video_job(job_id, directory, sources, options):
                         if time.monotonic() - job.get('_persisted', 0) >= 1:
                             atomic_json(directory / 'job.json', public_job(job))
                             job['_persisted'] = time.monotonic()
-                stats = extract_video(source, directory, SOURCE_DIR, options, emit, job['_cancel'].is_set, known_groups)
+                stats = extract_video(source, directory, root, options, emit, job['_cancel'].is_set, known_groups)
                 with _jobs_lock:
                     job['videos'].append(stats)
                     job['current'] = stats
@@ -449,7 +528,7 @@ def api_video_import():
         if not line.strip():
             continue
         if not path.is_absolute():
-            path = SOURCE_DIR / path
+            path = source_dir() / path
         path = path.resolve()
         if path.is_dir():
             sources.extend(sorted(p for p in path.rglob('*') if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS))
@@ -483,7 +562,7 @@ def api_video_import():
     with _jobs_lock:
         _jobs[job_id] = job
         atomic_json(directory / 'job.json', public_job(job))
-    _executor.submit(run_video_job, job_id, directory, sources, options)
+    _executor.submit(run_video_job, job_id, directory, sources, options, source_dir())
     return jsonify(id=job_id), 202
 
 
@@ -526,7 +605,7 @@ def api_export():
     fraction = float(data.get('val_fraction', 0))
     rows = []
     with _save_lock:
-        for image in scan_images(SOURCE_DIR):
+        for image in scan_images(source_dir()):
             path = get_image_path(image['name'])
             label = find_label_path(path)
             if not label:

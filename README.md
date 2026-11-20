@@ -10,6 +10,7 @@
 ## 功能
 
 - **图片标注**：导入图片、手工画框、修改类别、批量操作、缩放和平移。
+- **页面打开目录**：浏览磁盘、进入子目录，打开整个图片文件夹；可包含子目录并读取已有标签。
 - **视频标注**：批量导入本机视频或目录，支持指定时间范围与抽帧间隔。
 - **近似帧筛选**：结合感知哈希、整体像素差与局部像素差，减少重复画面。
 - **后台抽帧**：显示候选数、筛除数和保留数，可停止任务并保留已提取帧。
@@ -30,7 +31,7 @@ git clone https://github.com/Bai-clou/yolo-video-annotator.git
 cd yolo-video-annotator
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-annotation.txt
-.\.venv\Scripts\python.exe label_app.py --source .\annotation_workspace
+.\.venv\Scripts\python.exe label_app.py
 ```
 
 ### Linux / macOS
@@ -40,17 +41,31 @@ git clone https://github.com/Bai-clou/yolo-video-annotator.git
 cd yolo-video-annotator
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-annotation.txt
-.venv/bin/python label_app.py --source ./annotation_workspace
+.venv/bin/python label_app.py
 ```
 
-启动后打开 **<http://127.0.0.1:5000>**。`--source` 是图片及抽帧工作目录，不是视频文件路径；目录不存在时自动创建。视频在页面中导入。服务只监听本机，关闭服务请在启动终端按 `Ctrl+C`。
+启动后打开 **<http://127.0.0.1:5000>**，点击 **打开图片目录 → 选择文件夹 → 打开目录**，即可开始标注。不加 `--source` 时，初始工作目录为程序目录；也可用 `--source ./annotation_workspace` 指定初始目录，不存在时自动创建。视频在页面中导入。服务只监听本机，关闭服务请在启动终端按 `Ctrl+C`。
 
 如果已有可用 Python 环境，也可以直接安装依赖并运行：
 
 ```bash
 python -m pip install -r requirements-annotation.txt
-python label_app.py --source ./annotation_workspace
+python label_app.py
 ```
+
+## 在页面中选择目录
+
+- **图片目录**：顶部点击 **打开图片目录**，在页面内的文件夹浏览器中选择磁盘、返回上一级或点击子目录，再点 **选择此目录 → 打开目录**。也可以直接粘贴本机目录路径。
+- **包含子目录**：默认勾选；所有图片按相对路径列出，子目录中的同名图片不会混淆。不勾选则只读取当前层。点号开头的目录、`env/venv`、`__pycache__` 与视频工作区不会作为普通图片重复扫描；保留的视频帧仍会单独加载。
+- **原位标注**：打开目录不会复制图片，直接读取已有同名 TXT 或数字类别子目录中的标签。新标签继续按原有规则保存在各图片所在目录；打开新目录后，不沿用启动时的 `--output` 目录。
+- **切换保护**：有未保存修改时，点击 **保存全部并打开**；保存失败会留在原目录。请先等待或停止当前页面的抽帧/AI 任务，再切换目录。
+- **视频目录**：点击 **导入视频 → 添加视频目录**，同样使用页面内的文件夹浏览器；可多次添加多个目录，目录内及其子目录的视频会一起抽帧。
+
+页面顶部显示当前工作目录，后续单文件上传、视频抽帧、AI 配置和导出均使用这个目录。当前浏览器会话内刷新可继续使用所选目录；服务重启后回到启动目录，可再次在页面选择。完整对话和未保存草稿仍遵循原有刷新规则，切换前请保存。
+
+![打开目录后加载子目录图片](docs/images/folder-import-demo.jpg)
+
+*截图使用合成素材，展示整目录加载和当前工作目录，不代表模型识别效果。*
 
 ## 标注流程
 
@@ -60,8 +75,8 @@ python label_app.py --source ./annotation_workspace
 视频 → 间隔抽帧 → 筛除近似帧 → 人工画框/核对类别 → 保存 → 导出图片集
 ```
 
-1. 点击 **添加图片**，或点击 **导入视频**。
-2. 视频可填写本机文件/目录路径，每行一个；目录递归查找视频。也可通过文件选择器上传视频。大文件使用路径导入可避免复制一份原视频。
+1. 点击 **打开图片目录** 加载整个文件夹，点击 **添加图片** 上传一个或多个文件，或点击 **导入视频**。
+2. 视频可点击 **添加视频目录**，或填写本机文件/目录路径，每行一个；目录递归查找视频。也可通过文件选择器上传多个视频。目录与路径导入无需复制一份原视频。
 3. 设置间隔和去重参数，点击 **开始抽帧**。完成后关闭弹窗，保留帧进入图片列表。
 4. 拖拽空白处画框，修改类别 ID；对辅助检测产生的框逐个核对、补框或删除。
 5. 点击 **保存当前** 或 **全部保存**。确认当前图片没有目标时，可以保存空 TXT。
@@ -220,6 +235,7 @@ label_app.py                   # Flask 页面与标注、视频任务、导出 A
 ai_annotation.py               # 视觉 API 适配、会话 Key 与标注结果校验
 ai_jobs.py                     # 后台 AI 任务、状态恢复与取消
 static/ai_annotation.js         # AI 对话、草稿应用与坐标修正
+static/directories.js           # 图片工作目录切换与视频目录选择
 video_frames.py                # 视频采样、近似帧筛选与分组导出
 templates/index.html           # 标注界面与画布操作
 classes.json                   # 默认鸟种映射
@@ -227,6 +243,7 @@ requirements-annotation.txt    # 基础依赖，不包含模型运行环境
 tests/test_video_annotation.py # 抽帧、标签、导出与分组测试
 tests/test_ai_annotation.py    # 视觉 API 协议、Key 与错误处理测试
 tests/test_ai_jobs.py          # 后台进度、刷新恢复、取消与防重复请求
+tests/test_directories.py      # 目录浏览、递归加载、保存隔离与视频目录导入
 docs/images/annotation-demo.jpg
 VIDEO_ANNOTATION.md            # 详细操作与保存目录说明
 ```

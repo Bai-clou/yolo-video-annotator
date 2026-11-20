@@ -30,6 +30,16 @@
     border-radius: 4px; cursor: pointer; font-size: 13px;
   }
   #header button:hover { background: var(--accent); }
+  #workspace-bar { padding:5px 20px; background:var(--panel); color:var(--text2); font-size:12px;
+    border-bottom:1px solid var(--border); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
+  #header > div { display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end; }
+  .folder-location { display:flex; gap:6px; margin:12px 0; }
+  .folder-location input { flex:1; min-width:0; padding:8px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; }
+  #folder-drives { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0; }
+  #folder-list { height:280px; overflow:auto; border:1px solid var(--border); border-radius:5px; }
+  #folder-list button { display:block; width:100%; border:0; border-bottom:1px solid var(--border); background:var(--panel); color:var(--text); padding:10px 14px; text-align:left; cursor:pointer; }
+  #folder-list button:hover { background:var(--surface); }
+  #folder-list .hint { padding:14px; }
 
   #help-panel {
     background: var(--panel); border-bottom: 1px solid var(--border);
@@ -218,12 +228,14 @@
 <div id="header">
   <h1><span class="dot">●</span> YOLO 图片与视频标注工具</h1>
   <div>
+    <button onclick="openFolderDialog()">📂 打开图片目录</button>
     <button onclick="addImages()">📁 添加图片</button>
     <button onclick="openVideoDialog()">🎞 导入视频</button>
     <button onclick="openExportDialog()">📦 导出图片集</button>
     <button onclick="toggleHelp()" id="help-btn">📖 操作说明</button>
   </div>
 </div>
+<div id="workspace-bar" title="">当前工作目录：<span id="workspace-path">读取中…</span></div>
 
 <div id="help-panel">
   <b>🖱 鼠标：</b>拖拽空白=画手工框 | 单击框=选中 | 滚轮=以鼠标位置缩放 | 右键/中键拖动或空格+左键=平移 | 双击=复位<br>
@@ -346,10 +358,43 @@
 
 <input type="file" id="file-input" accept="image/*" multiple hidden>
 
+<dialog id="folder-dialog">
+  <h2>打开图片目录</h2>
+  <p>选择本机文件夹后，加载其中所有图片和已有 YOLO 标签，直接在该目录标注，无需复制图片。可勾选包含子目录。</p>
+  <label class="config-field">图片目录<input id="folder-path" type="text" placeholder="例如 D:\鸟类图片\新素材" onkeydown="if(event.key==='Enter')openImageDirectory()"></label>
+  <button class="action" id="folder-browse" onclick="pickLocalFolder('images')">选择文件夹…</button>
+  <label class="hint"><input id="folder-recursive" type="checkbox" checked> 包含子目录中的图片</label>
+  <p>切换后，新标签按原有规则保存在所选图片目录中；视频抽帧和导出也使用该工作目录。服务重启后可再次在这里打开目录。</p>
+  <div id="folder-status" role="status"></div>
+  <div class="dialog-actions">
+    <button class="action" onclick="document.getElementById('folder-dialog').close()">取消</button>
+    <button class="action" id="folder-save-open" onclick="openImageDirectory(true)" hidden>保存全部并打开</button>
+    <button class="action primary" id="folder-open" onclick="openImageDirectory()">打开目录</button>
+  </div>
+</dialog>
+
+<dialog id="folder-browser-dialog">
+  <h2>选择文件夹</h2>
+  <p>点击磁盘或子目录浏览，选好后点击“选择此目录”。也可以直接输入完整目录路径。</p>
+  <div id="folder-drives" aria-label="磁盘列表"></div>
+  <div class="folder-location">
+    <button class="action" id="folder-parent" onclick="browseFolders(folderBrowser.parent)">↑ 上一级</button>
+    <input id="folder-location" aria-label="浏览目录路径" onkeydown="if(event.key==='Enter')browseFolders(this.value)">
+    <button class="action" onclick="browseFolders(document.getElementById('folder-location').value)">前往</button>
+  </div>
+  <div id="folder-list" aria-label="子目录列表"></div>
+  <div id="folder-browser-status" role="status"></div>
+  <div class="dialog-actions">
+    <button class="action" onclick="document.getElementById('folder-browser-dialog').close()">取消选择</button>
+    <button class="action primary" id="folder-select" onclick="selectBrowsedFolder()" disabled>选择此目录</button>
+  </div>
+</dialog>
+
 <dialog id="video-dialog">
   <h2>导入视频并筛选标注帧</h2>
   <p>填写本机视频文件或目录，每行一个；目录会包含子目录的视频。使用本机路径无需复制原视频。</p>
   <textarea id="video-paths" rows="3" placeholder="D:\鸟类视频\白鹤.mp4&#10;D:\鸟类视频\新素材"></textarea>
+  <button class="action" id="video-folder-browse" onclick="pickLocalFolder('videos')">📂 添加视频目录…</button>
   <label>或选择视频文件：<input type="file" id="video-files" accept="video/*,.mts,.m2ts,.mkv" multiple></label>
   <div class="form-grid">
     <label>抽帧间隔（秒）<input id="frame-interval" type="number" value="2" min="0.05" step="0.5"></label>
@@ -420,6 +465,7 @@
 // 全局状态
 // ============================================================
 const state = {
+  sourceDir: null,
   images: [],            // [{name, path, size}]
   annotations: {},       // {name: [{id,class_id,x_center,y_center,width,height,conf,source}]}
   saved: {},             // {name: bool}
@@ -439,6 +485,12 @@ const state = {
 const canvas = document.getElementById('canvas');
 state.ctx = canvas.getContext('2d');
 
+function workspaceFetch(url, options={}) {
+  const headers=new Headers(options.headers || {});
+  if (state.sourceDir) headers.set('X-Annotation-Source',encodeURIComponent(state.sourceDir));
+  return fetch(url,{...options,headers});
+}
+
 // ============================================================
 // 初始化 — 扫描图片目录
 // ============================================================
@@ -446,9 +498,12 @@ state.ctx = canvas.getContext('2d');
 async function init() {
   showLoading(true);
   try {
-    const resp = await fetch('/api/scan');
+    const resp = await workspaceFetch('/api/scan');
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || '扫描失败');
+    state.sourceDir=data.source_dir;
+    document.getElementById('workspace-path').textContent=data.source_dir;
+    document.getElementById('workspace-bar').title=data.source_dir;
     state.images = data.images;
     state.classes = data.classes;
     for (const img of state.images) {
@@ -505,7 +560,7 @@ async function loadImage(index) {
   const img = state.images[index];
   try {
     if (!Object.hasOwn(state.annotations, img.name)) {
-      const response = await fetch('/api/labels?filename=' + encodeURIComponent(img.name));
+      const response = await workspaceFetch('/api/labels?filename=' + encodeURIComponent(img.name));
       const labels = await response.json();
       if (!response.ok) throw new Error(labels.error || '标签读取失败');
       if (!Object.hasOwn(state.annotations, img.name)) {
@@ -923,7 +978,7 @@ async function reDetectCurrent() {
   const name = currentName(); if (!name) return;
   const conf = getConf();
   try {
-    const resp = await fetch('/api/detect', {
+    const resp = await workspaceFetch('/api/detect', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ filename: name, default_class_id: state.defaultClassId, conf })
     });
@@ -1016,7 +1071,7 @@ async function saveAll() {
   } catch(e) { alert('保存失败: ' + e.message); }
 }
 async function doSave(data) {
-  const resp = await fetch('/api/save', {
+  const resp = await workspaceFetch('/api/save', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ annotations: data })
   });
@@ -1040,7 +1095,7 @@ async function addFiles(fileList) {
   for (const f of fileList) fd.append('images', f);
   try {
     showLoading(true);
-    const resp = await fetch('/api/upload', { method:'POST', body: fd });
+    const resp = await workspaceFetch('/api/upload', { method:'POST', body: fd });
     const data = await resp.json();
     if (data.error) { alert(data.error); return; }
     // 追加并检测
@@ -1058,7 +1113,7 @@ async function addFiles(fileList) {
 
 async function detectAll(filenames) {
   try {
-    const resp = await fetch('/api/detect-all', {
+    const resp = await workspaceFetch('/api/detect-all', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ filenames, default_class_id: state.defaultClassId, conf: getConf() })
     });
@@ -1120,7 +1175,7 @@ async function openVideoDialog() {
   document.getElementById('video-dialog').showModal();
   if (videoJobId) return;
   try {
-    const response = await fetch('/api/videos/jobs');
+    const response = await workspaceFetch('/api/videos/jobs');
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '历史任务读取失败');
     const active = data.jobs.find(job => ['queued','running'].includes(job.status));
@@ -1134,6 +1189,7 @@ async function openVideoDialog() {
 function setVideoBusy(busy) {
   document.getElementById('video-start').disabled = busy;
   document.getElementById('video-cancel').hidden = !busy;
+  document.getElementById('video-folder-browse').disabled = busy;
 }
 async function startVideoImport() {
   if (videoJobId) return;
@@ -1151,7 +1207,7 @@ async function startVideoImport() {
   for (const file of document.getElementById('video-files').files) form.append('videos',file);
   try {
     setVideoBusy(true); videoStatus('正在提交视频；使用上传方式时请等待文件传输完成…');
-    const response = await fetch('/api/videos/import', {method:'POST',body:form});
+    const response = await workspaceFetch('/api/videos/import', {method:'POST',body:form});
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '视频导入失败');
     videoJobId = data.id;
@@ -1162,7 +1218,7 @@ async function pollVideoJob() {
   clearTimeout(videoPollTimer);
   if (!videoJobId) return;
   try {
-    const response = await fetch('/api/videos/jobs/'+videoJobId);
+    const response = await workspaceFetch('/api/videos/jobs/'+videoJobId);
     const job = await response.json();
     if (!response.ok) throw new Error(job.error || '任务读取失败');
     const current = job.current || {};
@@ -1193,13 +1249,13 @@ async function pollVideoJob() {
 async function cancelVideoJob() {
   if (!videoJobId) return;
   try {
-    const response = await fetch('/api/videos/jobs/'+videoJobId+'/cancel', {method:'POST'});
+    const response = await workspaceFetch('/api/videos/jobs/'+videoJobId+'/cancel', {method:'POST'});
     if (!response.ok) throw new Error('停止请求失败');
     videoStatus('正在停止，已提取图片会保留…');
   } catch(error) { videoStatus(error.message,true); }
 }
 async function refreshImages() {
-  const response = await fetch('/api/scan');
+  const response = await workspaceFetch('/api/scan');
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || '图片列表读取失败');
   const known = new Set(state.images.map(image=>image.name));
@@ -1222,7 +1278,7 @@ async function exportDataset() {
   const button=document.getElementById('export-start');
   button.disabled=true; status.textContent='正在整理已保存的图片与标签…';
   try {
-    const response = await fetch('/api/export', {method:'POST',headers:{'Content-Type':'application/json'},
+    const response = await workspaceFetch('/api/export', {method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({val_fraction:document.getElementById('export-split').checked ? Number(document.getElementById('export-fraction').value) : 0})});
     const data=await response.json();
     if (!response.ok) throw new Error(data.error || '导出失败');
@@ -1240,6 +1296,7 @@ async function exportDataset() {
 setTimeout(resizeCanvas, 100);
 init();
 </script>
+<script src="{{ url_for('static', filename='directories.js') }}"></script>
 <script src="{{ url_for('static', filename='ai_annotation.js') }}"></script>
 </body>
 </html>

@@ -5,7 +5,7 @@ const aiState = {config:null, mode:'manual', busy:false, busyImage:null,
   job:null, polling:false, restoring:false};
 
 async function aiAPI(path, body) {
-  const response = await fetch('/api/ai/' + path, body === undefined ? {} : {
+  const response = await workspaceFetch('/api/ai/' + path, body === undefined ? {} : {
     method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   let data;
   try { data=await response.json(); } catch { throw new Error('AI 服务未返回有效 JSON，请检查服务日志和接口配置。'); }
