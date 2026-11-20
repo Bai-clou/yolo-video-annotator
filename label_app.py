@@ -15,6 +15,7 @@ from PIL import Image
 
 from video_frames import (FrameOptions, VIDEO_EXTENSIONS, WORK_FOLDER, atomic_json,
                           export_dataset, extract_video, read_manifest)
+import ai_annotation
 
 ROOT = Path(__file__).resolve().parent
 MODEL_PATH = str(ROOT / 'yolo26x.pt')
@@ -31,6 +32,16 @@ _save_lock = threading.Lock()
 _jobs_lock = threading.Lock()
 _jobs = {}
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='video-frames')
+_ai_stores = {}
+_ai_stores_lock = threading.Lock()
+
+
+def ai_store():
+    path = SOURCE_DIR.resolve() / '.ai-config.json'
+    with _ai_stores_lock:
+        if path not in _ai_stores:
+            _ai_stores[path] = ai_annotation.ConfigStore(path)
+        return _ai_stores[path]
 
 
 def get_model():
@@ -263,6 +274,39 @@ def api_detect_all():
         if path:
             results[name] = _run_detection(path, data.get('default_class_id', 0), data.get('conf', CONFIDENCE_THRESHOLD))
     return jsonify(results=results)
+
+
+@app.get('/api/ai/config')
+def api_ai_get_config():
+    return jsonify(ai_store().public())
+
+
+@app.post('/api/ai/config')
+def api_ai_save_config():
+    return jsonify(ai_store().save(json_body()))
+
+
+@app.post('/api/ai/test')
+def api_ai_test():
+    config, key = ai_store().snapshot(json_body())
+    return jsonify(ai_annotation.test_connection(config, key))
+
+
+@app.post('/api/ai/annotate')
+def api_ai_annotate():
+    data = json_body()
+    path = get_image_path(data.get('filename', ''))
+    if path is None:
+        return jsonify(error='当前图片不存在'), 404
+    current = checked_boxes(data.get('current_boxes', []))
+    if len(current) > 1000:
+        raise ValueError('当前图片超过 1000 个框，请分批处理')
+    config, key = ai_store().snapshot()
+    result = ai_annotation.annotate(config, key, path, CLASSES, current,
+                                    data.get('instruction'), data.get('history', []))
+    result['boxes'] = checked_boxes(result['boxes'])
+    result['filename'] = image_name(path)
+    return jsonify(result)  # Draft only: a separate /api/save call is required to persist labels.
 
 
 @app.post('/api/save')

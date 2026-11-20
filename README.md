@@ -16,6 +16,7 @@
 - **后台抽帧**：显示候选数、筛除数和保留数，可停止任务并保留已提取帧。
 - **标注持久化**：刷新或重启后读取已有标签，支持明确保存无目标空标签。
 - **YOLO 辅助检测**：生成候选框后人工核对；模型仅在使用时加载。
+- **自然语言 AI 标注**：配置自己的视觉模型 API，通过侧栏对话标注当前图片，再人工修正和保存。
 - **数据集导出**：下载原图、YOLO TXT、类别表与视频来源清单。
 - **按视频分组划分**：可生成 `train/val` 及 `data.yaml`，同一视频不会被拆到两个分区。
 
@@ -135,6 +136,24 @@ class_id center_x center_y width height
 
 中心坐标与宽高均相对图片尺寸归一化到 0–1。空 TXT 表示人工确认的无目标样本。整张训练图片中的目标应完整标注，避免把遗漏目标作为背景。
 
+## 自然语言 AI 标注
+
+1. 在侧栏点击 **AI 标注 → 配置 API**。
+2. 填写支持图片输入的模型 ID、API 地址和自己的 Key，选择 **Chat Completions（OpenAI 兼容）** 或 **Responses**。
+3. 点击 **测试连接并保存**；测试发送生成的白色图片，不发送当前工作图。
+4. 输入需求，例如“框出所有白鹤，类别为 0，保留已有框并补全漏标”，点击 **发送并标注**。
+5. 检查返回的紫色框，修改类别、选中框修正坐标，或删除重画，再保存和导出。
+
+AI 会结合本图最近对话和当前已有框处理后续要求。结果是未保存草稿，可还原到最近一次 AI 应用前；等待期间切换图片或修改草稿，不会自动串图或覆盖新修改。
+
+Key 仅留在服务进程内，重启后需重填；非密钥配置保存在工作目录的 `.ai-config.json`，已加入忽略规则。正式标注会发送当前图片和需求至所配置的 API，可能产生服务商用量。密集小目标的定位仍需人工复核。
+
+![AI 对话与人工修正](docs/images/ai-annotation-demo.jpg)
+
+*合成图片与本地模拟接口的流程演示，不代表真实模型准确率。*
+
+支持范围、参数与错误排查见 [AI 标注配置说明](docs/AI_ANNOTATION.md)。
+
 ## 导出与训练划分
 
 默认导出尚未划分的图片集：
@@ -199,11 +218,14 @@ python -m pip install ultralytics
 
 ```text
 label_app.py                   # Flask 页面与标注、视频任务、导出 API
+ai_annotation.py               # 视觉 API 适配、会话 Key 与标注结果校验
+static/ai_annotation.js         # AI 对话、草稿应用与坐标修正
 video_frames.py                # 视频采样、近似帧筛选与分组导出
 templates/index.html           # 标注界面与画布操作
 classes.json                   # 默认鸟种映射
 requirements-annotation.txt    # 基础依赖，不包含模型运行环境
 tests/test_video_annotation.py # 抽帧、标签、导出与分组测试
+tests/test_ai_annotation.py    # 视觉 API 协议、Key 与错误处理测试
 docs/images/annotation-demo.jpg
 VIDEO_ANNOTATION.md            # 详细操作与保存目录说明
 ```

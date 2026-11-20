@@ -11,6 +11,7 @@ htmlcov/
 # Local settings, credentials, backups and validation data
 .env
 .env.*
+.ai-config.json
 !.env.example
 .idea/
 .vscode/

@@ -175,6 +175,37 @@
     padding:10px 16px; border:1px solid var(--green); border-radius:6px; background:var(--panel); display:none; }
   #frame-origin { color:var(--text2); font-size:11px; white-space:nowrap; }
   #class-legend { font-size:11px; line-height:1.8; color:var(--text2); margin-top:8px; }
+  #side-panel { overflow-y:auto; }
+  #side-panel > .section { flex-shrink:0; }
+  #table-wrap { min-height:110px; overflow:auto; }
+  .mode-switch { display:flex; gap:8px; }
+  .mode-switch button { flex:1; padding:8px; border:1px solid var(--border); border-radius:5px;
+    background:var(--bg); color:var(--text2); cursor:pointer; }
+  .mode-switch button.active { color:#fff; border-color:#b29aff; background:#443568; }
+  [hidden] { display:none !important; }
+  #ai-tools { padding:10px 14px; border-bottom:1px solid var(--border); flex-shrink:0; }
+  .ai-topline { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; }
+  #ai-config-summary { font-size:12px; color:var(--text2); overflow-wrap:anywhere; }
+  #ai-chat { max-height:155px; min-height:75px; overflow:auto; border:1px solid var(--border);
+    border-radius:6px; background:var(--bg); padding:8px; margin:8px 0; }
+  .ai-message { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.65;
+    border-radius:5px; padding:7px 9px; margin-bottom:6px; background:#24324c; }
+  .ai-message.user { background:#3c3153; }
+  .ai-message.error { color:#ff9bad; }
+  #ai-prompt { width:100%; min-height:66px; resize:vertical; background:var(--bg); color:var(--text);
+    border:1px solid var(--border); border-radius:5px; padding:8px; font:12px/1.6 inherit; }
+  .ai-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .ai-actions button { margin-left:0 !important; }
+  #ai-status { white-space:pre-wrap; font-size:12px; color:#c5b1ff; line-height:1.6; margin-top:6px; }
+  #ai-config-dialog .config-field { display:grid; gap:5px; margin:12px 0; }
+  #ai-config-dialog input, #ai-config-dialog select { width:100%; background:var(--bg); color:var(--text);
+    border:1px solid var(--border); padding:8px; border-radius:5px; }
+  #ai-config-status { white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.7; }
+  #ai-config-status.error { color:#ff9bad; }
+  .coord-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px; }
+  .coord-grid label { display:flex; align-items:center; justify-content:space-between; font-size:11px !important; }
+  .coord-grid input { width:90px !important; }
+  #table-wrap tbody tr.ai { border-left:3px solid #b29aff; }
   @media(max-width:1200px) {
     #side-panel { width:360px; } #footer { padding:8px; gap:8px; flex-wrap:wrap; }
     #jump-input { width:150px; } #header { padding:8px 12px; gap:8px; }
@@ -218,6 +249,10 @@
   </div>
 
   <div id="side-panel">
+    <div class="section mode-switch" role="tablist" aria-label="标注方式">
+      <button id="mode-manual" role="tab" aria-selected="true" class="active" onclick="setAnnotationMode('manual')">✍ 手动标注</button>
+      <button id="mode-ai" role="tab" aria-selected="false" onclick="setAnnotationMode('ai')">✦ AI 标注</button>
+    </div>
     <div class="section">
       <label>预设类别 ID:</label>
       <input type="number" id="default-class-id" value="0" min="0" max="999"
@@ -227,7 +262,7 @@
       <button class="btn accent" onclick="applyDefaultClassToSelected()">应用到选中框</button>
       <div id="class-legend"></div>
     </div>
-    <div class="section">
+    <div class="section" id="manual-tools">
       <label>置信度: <span id="conf-value">25</span>%</label>
       <input type="range" id="conf-slider" min="1" max="90" value="25"
         oninput="onConfSliderChange(this.value)">
@@ -235,6 +270,31 @@
         🔄 辅助检测当前图（需人工核对）
       </button>
       <label class="hint"><input type="checkbox" id="auto-detect-upload"> 添加普通图片后自动辅助检测</label>
+    </div>
+    <div id="ai-tools" hidden>
+      <div class="ai-topline">
+        <span id="ai-config-summary">尚未配置视觉模型</span>
+        <button class="btn" onclick="openAIConfig()">⚙ 配置 API</button>
+      </div>
+      <div class="hint">发送当前图片、已有框与最近对话至你配置的 API。结果待人工核对后保存。</div>
+      <div id="ai-chat" role="log" aria-label="当前图片的 AI 对话"></div>
+      <textarea id="ai-prompt" aria-label="AI 标注需求" placeholder="例如：框出所有白鹤，类别为 0；保留已有框，并补上漏掉的小鸟。" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();sendAIMessage()}"></textarea>
+      <div class="ai-actions">
+        <button class="btn accent" id="ai-send" onclick="sendAIMessage()">发送并标注</button>
+        <button class="btn" id="ai-apply" onclick="applyPendingAI()" hidden>应用本次结果</button>
+        <button class="btn" id="ai-undo" onclick="undoAIResult()" disabled>还原到 AI 前</button>
+        <button class="btn" onclick="clearAIChat()">清空对话</button>
+      </div>
+      <div id="ai-status" role="status"></div>
+    </div>
+    <div class="section" id="coordinate-editor" hidden>
+      <div class="hint">选中框坐标修正（0–1，中心点与宽高）</div>
+      <div class="coord-grid">
+        <label>X 中心<input id="coord-x_center" type="number" min="0" max="1" step="0.001" onchange="changeBoxCoordinate('x_center',this.value)"></label>
+        <label>Y 中心<input id="coord-y_center" type="number" min="0" max="1" step="0.001" onchange="changeBoxCoordinate('y_center',this.value)"></label>
+        <label>宽度<input id="coord-width" type="number" min="0.000001" max="1" step="0.001" onchange="changeBoxCoordinate('width',this.value)"></label>
+        <label>高度<input id="coord-height" type="number" min="0.000001" max="1" step="0.001" onchange="changeBoxCoordinate('height',this.value)"></label>
+      </div>
     </div>
     <div class="section" style="display:flex;justify-content:space-between;align-items:center;">
       <span>检测框列表</span>
@@ -326,6 +386,32 @@
 </dialog>
 <div id="notice" role="status"></div>
 
+<dialog id="ai-config-dialog">
+  <h2>配置视觉大模型 API</h2>
+  <p>支持兼容 OpenAI 的图片请求。填写 API 服务地址、视觉模型 ID 和你自己的 Key；测试会发送一张程序生成的白色图片，可能产生少量 API 用量。</p>
+  <label class="config-field">接口类型<select id="ai-protocol"><option value="chat_completions">Chat Completions（OpenAI 兼容）</option><option value="responses">Responses</option></select></label>
+  <label class="config-field">API 请求地址<input id="ai-base-url" type="url" autocomplete="off" placeholder="https://你的服务地址/v1 或完整 /chat/completions 地址"></label>
+  <label class="config-field">视觉模型名称 / 模型 ID<input id="ai-model" autocomplete="off" placeholder="填写服务商提供的、支持图片输入的模型 ID"></label>
+  <label class="config-field">API Key<input id="ai-key" type="password" autocomplete="new-password" placeholder="仅保存在当前服务进程，重启后需重填"></label>
+  <label class="hint"><input type="checkbox" id="ai-clear-key" style="width:auto"> 清除已保存的会话 Key（本地无密钥服务可留空）</label>
+  <details><summary>高级设置</summary>
+    <div class="form-grid">
+      <label class="config-field">Key 请求头<select id="ai-auth"><option value="bearer">Authorization: Bearer</option><option value="api_key">api-key</option></select></label>
+      <label class="config-field">Chat Token 参数<select id="ai-token-parameter"><option value="auto">自动</option><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></select></label>
+      <label class="config-field">最大输出 Token<input id="ai-max-tokens" type="number" min="256" max="65536" step="256" value="8192"></label>
+      <label class="config-field">超时（秒）<input id="ai-timeout" type="number" min="5" max="600" value="120"></label>
+      <label class="config-field">发图最长边（像素，0 原尺寸）<input id="ai-image-edge" type="number" min="0" max="8192" step="256" value="2048"></label>
+    </div>
+  </details>
+  <p>API 地址与模型设置会保存在当前工作目录。Key 不写入文件、不回传浏览器、不进入导出数据。图像会按所设尺寸等比缩放，标注坐标仍对应整张原图。</p>
+  <div id="ai-config-status" role="status"></div>
+  <div class="dialog-actions">
+    <button class="action" onclick="document.getElementById('ai-config-dialog').close()">关闭</button>
+    <button class="action" id="ai-test-config" onclick="testAIConfig()">测试连接并保存</button>
+    <button class="action primary" id="ai-save-config" onclick="saveAIConfig()">保存配置</button>
+  </div>
+</dialog>
+
 <script>
 // ============================================================
 // 全局状态
@@ -337,6 +423,7 @@ const state = {
   dirty: new Set(),
   classes: {},
   loadSequence: 0,
+  loadingImage: false,
   currentIndex: -1,
   defaultClassId: 0,
   selectedBoxIds: new Set(),
@@ -404,6 +491,7 @@ window.addEventListener('resize', () => { resizeCanvas(); });
 async function loadImage(index) {
   if (index < 0 || index >= state.images.length) return;
   const sequence = ++state.loadSequence;
+  state.loadingImage = true;
   state.currentIndex = index;
   state.selectedBoxIds.clear();
   state.canvasSelectedBoxId = null;
@@ -430,7 +518,11 @@ async function loadImage(index) {
     });
     if (sequence !== state.loadSequence) return;
     state.imgObj = loaded;
-  } catch(error) { notice(error.message); return; }
+  } catch(error) {
+    if (sequence===state.loadSequence) { state.loadingImage=false; state.imgObj=null; updateUI(); }
+    notice(error.message); return;
+  }
+  state.loadingImage = false;
 
   document.getElementById('jump-input').value = img.name;
   resizeCanvas();
@@ -497,7 +589,7 @@ function render() {
 
   for (const box of boxes) {
     const isSel = state.canvasSelectedBoxId === box.id || state.selectedBoxIds.has(box.id);
-    let color = box.source === 'manual' ? '#4da6ff' : '#4caf84';
+    let color = box.source === 'ai' ? '#b29aff' : box.source === 'manual' ? '#4da6ff' : '#4caf84';
     if (isSel) color = '#ff4d6a';
 
     const bx = box.x_center * iw * scale + ox - (box.width * iw * scale) / 2;
@@ -507,7 +599,7 @@ function render() {
     ctx.strokeStyle = color; ctx.lineWidth = isSel ? 3 : 2;
     ctx.strokeRect(bx, by, bw, bh);
     ctx.fillStyle = isSel ? 'rgba(255,77,106,.15)' :
-      (box.source === 'manual' ? 'rgba(77,166,255,.08)' : 'rgba(76,175,132,.08)');
+      (box.source === 'ai' ? 'rgba(178,154,255,.10)' : box.source === 'manual' ? 'rgba(77,166,255,.08)' : 'rgba(76,175,132,.08)');
     ctx.fillRect(bx, by, bw, bh);
 
     const label = `ID:${box.class_id}` + (box.conf != null ? ` ${(box.conf*100).toFixed(0)}%` : '');
@@ -721,8 +813,8 @@ function updateTable() {
   let html = '';
   for (const b of boxes) {
     const checked = state.selectedBoxIds.has(b.id) || state.canvasSelectedBoxId === b.id;
-    const srcLabel = b.source === 'manual' ? '🔵 手工' : `🟢 ${b.conf?(b.conf*100).toFixed(0)+'%':''}`;
-    const cls = state.canvasSelectedBoxId === b.id ? 'selected' : (b.source === 'manual' ? 'manual' : 'auto');
+    const srcLabel = b.source === 'ai' ? '✦ AI' : b.source === 'manual' ? '🔵 手工' : `🟢 ${b.conf?(b.conf*100).toFixed(0)+'%':''}`;
+    const cls = state.canvasSelectedBoxId === b.id ? 'selected' : (b.source === 'ai' ? 'ai' : b.source === 'manual' ? 'manual' : 'auto');
 
     html += `<tr class="${cls}" onclick="rowClick('${b.id}')">
       <td><input type="checkbox" ${checked?'checked':''} onclick="cbClick('${b.id}',event)"></td>
@@ -748,6 +840,7 @@ function updateTable() {
   }
   const annotated = state.images.filter(img => state.saved[img.name]).length;
   document.getElementById('annotated-count').textContent = `已标注 ${annotated} / ${state.images.length}`;
+  if (typeof updateCoordinateEditor==='function') updateCoordinateEditor();
 }
 
 function rowClick(boxId) {
@@ -794,7 +887,7 @@ function setBoxClass(id, value) {
   const number = Number(value);
   if (!Object.values(state.classes).includes(number)) { notice('类别 ID 不在类别表中'); updateTable(); return; }
   const box = (state.annotations[currentName()] || []).find(item => item.id === id);
-  if (box) { box.class_id = number; markDirty(); render(); updateTable(); }
+  if (box) { box.class_id = number; box.source='manual'; markDirty(); render(); updateTable(); }
 }
 function applyDefaultClassToAll() {
   for (const [n, boxes] of Object.entries(state.annotations)) {
@@ -992,11 +1085,15 @@ function updateUI() {
   document.getElementById('btn-next').disabled = idx >= state.images.length - 1;
   document.getElementById('default-class-id').value = state.defaultClassId;
   updateTable();
+  if (typeof updateAIPanel==='function') updateAIPanel();
 }
 function toggleHelp() { document.getElementById('help-panel').classList.toggle('open'); }
 
 function markDirty(name=currentName()) {
-  if (name) { state.saved[name] = false; state.dirty.add(name); }
+  if (name) {
+    state.saved[name] = false; state.dirty.add(name);
+    if (typeof onAnnotationChanged==='function') onAnnotationChanged(name);
+  }
 }
 let noticeTimer;
 function notice(message) {
@@ -1138,5 +1235,6 @@ async function exportDataset() {
 setTimeout(resizeCanvas, 100);
 init();
 </script>
+<script src="{{ url_for('static', filename='ai_annotation.js') }}"></script>
 </body>
 </html>
