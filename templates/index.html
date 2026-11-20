@@ -281,6 +281,8 @@
       <textarea id="ai-prompt" aria-label="AI 标注需求" placeholder="例如：框出所有白鹤，类别为 0；保留已有框，并补上漏掉的小鸟。" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();sendAIMessage()}"></textarea>
       <div class="ai-actions">
         <button class="btn accent" id="ai-send" onclick="sendAIMessage()">发送并标注</button>
+        <button class="btn" id="ai-resume" onclick="resumeAIJob()" hidden>恢复等待</button>
+        <button class="btn" id="ai-cancel" onclick="cancelAIJob()" hidden title="停止本地接收，不保证服务商终止计算或计费">停止接收</button>
         <button class="btn" id="ai-apply" onclick="applyPendingAI()" hidden>应用本次结果</button>
         <button class="btn" id="ai-undo" onclick="undoAIResult()" disabled>还原到 AI 前</button>
         <button class="btn" onclick="clearAIChat()">清空对话</button>
@@ -399,8 +401,9 @@
       <label class="config-field">Key 请求头<select id="ai-auth"><option value="bearer">Authorization: Bearer</option><option value="api_key">api-key</option></select></label>
       <label class="config-field">Chat Token 参数<select id="ai-token-parameter"><option value="auto">自动</option><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></select></label>
       <label class="config-field">最大输出 Token<input id="ai-max-tokens" type="number" min="256" max="65536" step="256" value="8192"></label>
-      <label class="config-field">超时（秒）<input id="ai-timeout" type="number" min="5" max="600" value="120"></label>
+      <label class="config-field">等待上限（秒）<input id="ai-timeout" type="number" min="5" max="1800" value="600"></label>
       <label class="config-field">发图最长边（像素，0 原尺寸）<input id="ai-image-edge" type="number" min="0" max="8192" step="256" value="2048"></label>
+      <label class="hint"><input id="ai-stream" type="checkbox" checked style="width:auto"> 流式接收，显示模型响应进度（不兼容时可关闭）</label>
     </div>
   </details>
   <p>API 地址与模型设置会保存在当前工作目录。Key 不写入文件、不回传浏览器、不进入导出数据。图像会按所设尺寸等比缩放，标注坐标仍对应整张原图。</p>
@@ -986,6 +989,7 @@ async function saveCurrent() {
     await doSave({ [name]: state.annotations[name] || [] });
     state.saved[name] = true;
     state.dirty.delete(name);
+    if (typeof onAnnotationsSaved==='function') onAnnotationsSaved(name);
     const img = state.images.find(i => i.name === name); if (img) img.annotated = true;
     refreshImageOptions(); updateUI();
     notice('已保存' + ((state.annotations[name] || []).length ? '' : '（无目标空标签）'));
@@ -1003,6 +1007,7 @@ async function saveAll() {
     for (const n of Object.keys(toSave)) {
       state.saved[n] = true;
       state.dirty.delete(n);
+      if (typeof onAnnotationsSaved==='function') onAnnotationsSaved(n);
       const img = state.images.find(i => i.name === n); if (img) img.annotated = true;
     }
     refreshImageOptions();

@@ -15,7 +15,7 @@
 - **后台抽帧**：显示候选数、筛除数和保留数，可停止任务并保留已提取帧。
 - **标注持久化**：刷新或重启后读取已有标签，支持明确保存无目标空标签。
 - **YOLO 辅助检测**：生成候选框后人工核对；模型仅在使用时加载。
-- **自然语言 AI 标注**：配置自己的视觉模型 API，通过侧栏对话标注当前图片，再人工修正和保存。
+- **自然语言 AI 标注**：配置自己的视觉模型 API，通过侧栏对话标注当前图片，再人工修正和保存；后台等待、流式进度与刷新恢复可用于耗时较长的图片。
 - **数据集导出**：下载原图、YOLO TXT、类别表与视频来源清单。
 - **按视频分组划分**：可生成 `train/val` 及 `data.yaml`，同一视频不会被拆到两个分区。
 
@@ -218,6 +218,7 @@ python -m pip install ultralytics
 ```text
 label_app.py                   # Flask 页面与标注、视频任务、导出 API
 ai_annotation.py               # 视觉 API 适配、会话 Key 与标注结果校验
+ai_jobs.py                     # 后台 AI 任务、状态恢复与取消
 static/ai_annotation.js         # AI 对话、草稿应用与坐标修正
 video_frames.py                # 视频采样、近似帧筛选与分组导出
 templates/index.html           # 标注界面与画布操作
@@ -225,6 +226,7 @@ classes.json                   # 默认鸟种映射
 requirements-annotation.txt    # 基础依赖，不包含模型运行环境
 tests/test_video_annotation.py # 抽帧、标签、导出与分组测试
 tests/test_ai_annotation.py    # 视觉 API 协议、Key 与错误处理测试
+tests/test_ai_jobs.py          # 后台进度、刷新恢复、取消与防重复请求
 docs/images/annotation-demo.jpg
 VIDEO_ANNOTATION.md            # 详细操作与保存目录说明
 ```

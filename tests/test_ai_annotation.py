@@ -68,7 +68,46 @@ class VisionHandler(BaseHTTPRequestHandler):
         else:
             response = {'choices': [{'finish_reason': 'length' if mode == 'truncated' else 'stop',
                                      'message': {'role': 'assistant', 'content': reply}}]}
+        if mode.startswith('stream'):
+            self.stream_reply(reply, response, responses, mode)
+            return
         self.reply(response)
+
+    def stream_reply(self, reply, response, responses, mode):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.close_connection = True
+        try:
+            def event(value):
+                encoded = json.dumps(value, ensure_ascii=False).encode('utf-8')
+                self.wfile.write(b'data: ' + encoded + b'\n\n')
+                self.wfile.flush()
+                time.sleep(getattr(self.server, 'stream_delay', 0.01))
+            if mode == 'stream_bad_json':
+                self.wfile.write(b'data: not-json\n\n')
+                return
+            if responses:
+                event({'type': 'response.reasoning_summary_text.delta', 'delta': 'private fixture analysis'})
+            else:
+                event({'choices': [{'index': 0, 'delta': {'reasoning_content': 'private fixture analysis'}}]})
+            for offset in range(0, len(reply), 45):
+                part = reply[offset:offset + 45]
+                if responses:
+                    event({'type': 'response.output_text.delta', 'delta': part})
+                else:
+                    event({'choices': [{'index': 0, 'delta': {'content': part}}]})
+                if mode == 'stream_disconnect':
+                    return
+            if responses:
+                response['status'] = 'incomplete' if mode == 'stream_truncated' else 'completed'
+                event({'type': 'response.incomplete' if mode == 'stream_truncated' else 'response.completed', 'response': response})
+            else:
+                event({'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'length' if mode == 'stream_truncated' else 'stop'}]})
+                self.wfile.write(b'data: [DONE]\n\n')
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def reply(self, data, status=200):
         encoded = json.dumps(data, ensure_ascii=False).encode('utf-8')
@@ -102,6 +141,7 @@ class AIAnnotationTests(unittest.TestCase):
         self.client = server.app.test_client()
         self.provider.calls.clear()
         self.provider.mode = 'normal'
+        self.provider.stream_delay = 0.01
         self.config = {**ai.DEFAULTS, 'base_url': f'http://127.0.0.1:{self.provider.server_port}/v1',
                        'model': 'offline-vision-fixture', 'api_key': 'unit-test-key'}
         self.image = self.root / 'test.png'
@@ -248,6 +288,38 @@ class AIAnnotationTests(unittest.TestCase):
         with patch('ai_annotation.request.OpenerDirector.open', side_effect=socket.timeout()):
             with self.assertRaisesRegex(ai.AIError, '超时'):
                 ai.test_connection(config, 'unit-test-key')
+
+    def test_chat_stream_progress_without_reasoning_disclosure(self):
+        self.provider.mode = 'stream'
+        config = ai.normalize_config(self.config)
+        updates = []
+        result = ai.annotate(config, 'unit-test-key', self.image, server.CLASSES, [], '标注两只鸟', [], updates.append)
+        self.assertEqual(len(result['boxes']), 2)
+        self.assertTrue(any(item.get('phase') == 'thinking' for item in updates))
+        self.assertTrue(any(item.get('phase') == 'generating' and item.get('received_chars', 0) > 0 for item in updates))
+        self.assertNotIn('private fixture analysis', json.dumps(updates))
+
+    def test_responses_stream(self):
+        self.provider.mode = 'stream'
+        config = ai.normalize_config({**self.config, 'protocol': 'responses'})
+        result = ai.annotate(config, 'unit-test-key', self.image, server.CLASSES, [], '标注两只鸟', [])
+        self.assertEqual(len(result['boxes']), 2)
+
+    def test_partial_and_truncated_streams_never_become_boxes(self):
+        config = ai.normalize_config(self.config)
+        for mode in ('stream_disconnect', 'stream_truncated', 'stream_bad_json'):
+            self.provider.mode = mode
+            with self.assertRaises(ai.AIError):
+                ai.annotate(config, 'unit-test-key', self.image, server.CLASSES, [], '标注两只鸟', [])
+        self.assertFalse(list(self.root.glob('**/*.txt')))
+
+    def test_stream_total_wait_budget_is_bounded(self):
+        self.provider.mode, self.provider.stream_delay = 'stream', 0.08
+        config = ai.normalize_config(self.config)
+        config['timeout'] = 0.12  # A short real socket deadline, without waiting minutes in tests.
+        with self.assertRaisesRegex(ai.AIError, '超时'):
+            ai.annotate(config, 'unit-test-key', self.image, server.CLASSES, [], '标注两只鸟', [])
+        self.assertEqual(len(self.provider.calls), 1)  # No automatic billed retry.
 
     def test_result_validation_and_safe_identifiers(self):
         original = sample_box()

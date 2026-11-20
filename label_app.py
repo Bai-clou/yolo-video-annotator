@@ -16,6 +16,7 @@ from PIL import Image
 from video_frames import (FrameOptions, VIDEO_EXTENSIONS, WORK_FOLDER, atomic_json,
                           export_dataset, extract_video, read_manifest)
 import ai_annotation
+from ai_jobs import JobManager
 
 ROOT = Path(__file__).resolve().parent
 MODEL_PATH = str(ROOT / 'yolo26x.pt')
@@ -34,6 +35,7 @@ _jobs = {}
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='video-frames')
 _ai_stores = {}
 _ai_stores_lock = threading.Lock()
+_ai_jobs = JobManager()
 
 
 def ai_store():
@@ -307,6 +309,58 @@ def api_ai_annotate():
     result['boxes'] = checked_boxes(result['boxes'])
     result['filename'] = image_name(path)
     return jsonify(result)  # Draft only: a separate /api/save call is required to persist labels.
+
+
+@app.post('/api/ai/jobs')
+def api_ai_start_job():
+    data = json_body()
+    path = get_image_path(data.get('filename', ''))
+    if path is None:
+        return jsonify(error='当前图片不存在'), 404
+    instruction = data.get('instruction')
+    if not isinstance(instruction, str) or not instruction.strip() or len(instruction) > 12000:
+        raise ValueError('请填写 1 到 12000 字的标注需求')
+    current = checked_boxes(data.get('current_boxes', []))
+    if len(current) > 1000:
+        raise ValueError('当前图片超过 1000 个框，请分批处理')
+    history = ai_annotation.clean_history(data.get('history', []))
+    config, key = ai_store().snapshot()
+    classes, filename, root = dict(CLASSES), image_name(path), str(SOURCE_DIR.resolve())
+    request_id = data.get('request_id', uuid.uuid4().hex)
+    if not isinstance(request_id, str) or not 1 <= len(request_id) <= 80:
+        raise ValueError('请求编号无效')
+
+    def work(progress):
+        result = ai_annotation.annotate(config, key, path, classes, current, instruction, history, progress)
+        result['boxes'] = checked_boxes(result['boxes'])
+        result['filename'] = filename
+        return result
+
+    job = _ai_jobs.create(root, filename, instruction, config['timeout'], request_id, work)
+    return jsonify(job), 202
+
+
+@app.get('/api/ai/jobs')
+def api_ai_pending_jobs():
+    return jsonify(jobs=_ai_jobs.pending(str(SOURCE_DIR.resolve())))
+
+
+@app.get('/api/ai/jobs/<identifier>')
+def api_ai_job(identifier):
+    job = _ai_jobs.get(str(SOURCE_DIR.resolve()), identifier)
+    return jsonify(job) if job else (jsonify(error='后台任务不存在或服务已重启；已保存标签不受影响'), 404)
+
+
+@app.post('/api/ai/jobs/<identifier>/cancel')
+def api_ai_cancel_job(identifier):
+    job = _ai_jobs.cancel(str(SOURCE_DIR.resolve()), identifier)
+    return jsonify(job) if job else (jsonify(error='后台任务不存在'), 404)
+
+
+@app.post('/api/ai/jobs/<identifier>/ack')
+def api_ai_ack_job(identifier):
+    acknowledged = _ai_jobs.acknowledge(str(SOURCE_DIR.resolve()), identifier)
+    return jsonify(ok=True) if acknowledged else (jsonify(error='后台任务不存在'), 404)
 
 
 @app.post('/api/save')
