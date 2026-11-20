@@ -104,6 +104,17 @@ class AIJobTests(unittest.TestCase):
         self.assertEqual(cancelled['status'], 'cancelled')
         self.assertNotIn('result', cancelled)
 
+    def test_token_limit_error_keeps_recovery_settings_without_result_or_key(self):
+        error = ai.OutputTokenLimit({'max_tokens': 8192}, analysis_chars=200, received_chars=0)
+        with patch('label_app.ai_annotation.annotate', side_effect=error) as provider:
+            job = self.start()
+            failed = self.wait(job['id'])
+        self.assertEqual(failed['error_code'], 'output_token_limit')
+        self.assertEqual(failed['error_details']['suggested_max_tokens'], 32768)
+        self.assertNotIn('result', failed)
+        self.assertNotIn('unit-test-key', json.dumps(failed))
+        self.assertEqual(provider.call_count, 1)
+
     def test_mismatched_request_id_and_active_task_do_not_call_provider(self):
         release, started = threading.Event(), threading.Event()
         def work(*args):

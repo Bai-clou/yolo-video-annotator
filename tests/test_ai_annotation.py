@@ -92,6 +92,9 @@ class VisionHandler(BaseHTTPRequestHandler):
                 event({'type': 'response.reasoning_summary_text.delta', 'delta': 'private fixture analysis'})
             else:
                 event({'choices': [{'index': 0, 'delta': {'reasoning_content': 'private fixture analysis'}}]})
+            if mode == 'stream_reasoning_only':
+                event({'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'length'}]})
+                return
             for offset in range(0, len(reply), 45):
                 part = reply[offset:offset + 45]
                 if responses:
@@ -102,6 +105,8 @@ class VisionHandler(BaseHTTPRequestHandler):
                     return
             if responses:
                 response['status'] = 'incomplete' if mode == 'stream_truncated' else 'completed'
+                if mode == 'stream_truncated':
+                    response['incomplete_details'] = {'reason': 'max_output_tokens'}
                 event({'type': 'response.incomplete' if mode == 'stream_truncated' else 'response.completed', 'response': response})
             else:
                 event({'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'length' if mode == 'stream_truncated' else 'stop'}]})
@@ -174,7 +179,8 @@ class AIAnnotationTests(unittest.TestCase):
     def test_bad_configuration_and_key_format(self):
         for values in ({'base_url': 'file:///private'}, {'base_url': 'https://user:pass@example.com'},
                        {'base_url': 'https://example.com?api_key=secret'}, {'model': ''},
-                       {'timeout': 0}, {'max_tokens': True}, {'image_edge': 1}, {'api_key': 'bad\nheader'}):
+                       {'timeout': 0}, {'max_tokens': True}, {'max_tokens': 131073}, {'reasoning_effort': 'off'},
+                       {'image_edge': 1}, {'api_key': 'bad\nheader'}):
             response = self.client.post('/api/ai/config', json={**self.config, **values})
             self.assertEqual(response.status_code, 400, values)
 
@@ -349,6 +355,68 @@ class AIAnnotationTests(unittest.TestCase):
         self.assertEqual(sent, (256, 128))
         with Image.open(BytesIO(base64.b64decode(url.split(',', 1)[1]))) as image:
             self.assertEqual(image.size, sent)
+
+    def test_reasoning_auto_optimizes_only_known_official_glm(self):
+        config = ai.normalize_config({**self.config, 'base_url': 'https://open.bigmodel.cn/api/paas/v4', 'model': 'glm-5.3-flash'})
+        payload = ai.build_payload(config, '', [], '', 'data:image/jpeg;base64,fixture')
+        self.assertEqual(payload['reasoning_effort'], 'low')
+        self.assertNotIn('thinking', payload)  # This model cannot disable thinking.
+        for changed in ({'reasoning_effort': 'provider_default'}, {'model': 'glm-4.6v'}, {'base_url': 'https://gateway.example/v1'}):
+            value = ai.normalize_config({**config, **changed})
+            self.assertNotIn('reasoning_effort', ai.build_payload(value, '', [], '', 'fixture'))
+        config['reasoning_effort'] = 'max'
+        self.assertEqual(ai.build_payload(config, '', [], '', 'fixture')['reasoning_effort'], 'max')
+        config.update(protocol='responses', reasoning_effort='high')
+        payload = ai.build_payload(config, '', [], '', 'fixture')
+        self.assertEqual(payload['reasoning'], {'effort': 'high'})
+        self.assertNotIn('reasoning_effort', payload)
+
+    def test_larger_output_budget_and_reasoning_setting_persist_without_key(self):
+        self.assertEqual(ai.DEFAULTS['max_tokens'], 32768)
+        self.save_config(max_tokens=131072, reasoning_effort='low')
+        loaded = ai.ConfigStore(self.root / '.ai-config.json').public()
+        self.assertEqual(loaded['max_tokens'], 131072)
+        self.assertEqual(loaded['reasoning_effort'], 'low')
+        self.assertFalse(loaded['has_key'])
+        self.assertNotIn('unit-test-key', json.dumps(loaded))
+
+    def test_analysis_only_token_limit_has_actionable_details_without_partial_labels(self):
+        self.save_config(max_tokens=8192)
+        self.provider.mode = 'stream_reasoning_only'
+        response = self.annotate()
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertEqual(response.json['error_code'], 'output_token_limit')
+        self.assertEqual(response.json['error_details']['max_tokens'], 8192)
+        self.assertEqual(response.json['error_details']['suggested_max_tokens'], 32768)
+        self.assertEqual(response.json['error_details']['received_chars'], 0)
+        self.assertIn('只收到分析内容', response.json['error'])
+        self.assertNotIn('private fixture analysis', response.text)
+        self.assertEqual(len(self.provider.calls), 1)
+        self.assertFalse(list(self.root.rglob('*.txt')))
+
+    def test_truncated_stream_keeps_saved_boxes_and_reports_next_budget(self):
+        self.save_config(max_tokens=32768)
+        label = self.image.with_suffix('.txt')
+        original = '5 0.3 0.5 0.2 0.3\n'
+        label.write_text(original)
+        self.provider.mode = 'stream_truncated'
+        response = self.annotate()
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json['error_details']['suggested_max_tokens'], 65536)
+        self.assertGreater(response.json['error_details']['received_chars'], 0)
+        self.assertEqual(label.read_text(), original)
+        self.assertEqual(len(self.provider.calls), 1)
+
+    def test_responses_incomplete_reasons_and_untrusted_stats(self):
+        config = {**self.config, 'max_tokens': 8192}
+        with self.assertRaises(ai.OutputTokenLimit) as raised:
+            ai.response_text({'status': 'incomplete', 'incomplete_details': {'reason': 'max_output_tokens'},
+                              '_stream_stats': {'analysis_chars': 'not-a-number', 'unknown': 'ignored'}}, 'responses', config)
+        self.assertEqual(raised.exception.details['analysis_chars'], 0)
+        for details in ({'reason': 'content_filter'}, 'invalid', None):
+            with self.assertRaises(ai.AIError) as failure:
+                ai.response_text({'status': 'incomplete', 'incomplete_details': details}, 'responses', config)
+            self.assertNotIsInstance(failure.exception, ai.OutputTokenLimit)
 
 
 if __name__ == '__main__':

@@ -202,6 +202,8 @@ def json_body():
 
 @app.errorhandler(ValueError)
 def value_error(error):
+    if isinstance(error, ai_annotation.OutputTokenLimit):
+        return jsonify(error=str(error), error_code=error.code, error_details=error.details), 400
     return jsonify(error=str(error)), 400
 
 

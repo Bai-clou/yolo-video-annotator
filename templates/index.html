@@ -295,6 +295,7 @@
         <button class="btn accent" id="ai-send" onclick="sendAIMessage()">发送并标注</button>
         <button class="btn" id="ai-resume" onclick="resumeAIJob()" hidden>恢复等待</button>
         <button class="btn" id="ai-cancel" onclick="cancelAIJob()" hidden title="停止本地接收，不保证服务商终止计算或计费">停止接收</button>
+        <button class="btn" id="ai-token-settings" onclick="openAIOutputSettings()" hidden>调整输出额度</button>
         <button class="btn" id="ai-apply" onclick="applyPendingAI()" hidden>应用本次结果</button>
         <button class="btn" id="ai-undo" onclick="undoAIResult()" disabled>还原到 AI 前</button>
         <button class="btn" onclick="clearAIChat()">清空对话</button>
@@ -445,7 +446,9 @@
     <div class="form-grid">
       <label class="config-field">Key 请求头<select id="ai-auth"><option value="bearer">Authorization: Bearer</option><option value="api_key">api-key</option></select></label>
       <label class="config-field">Chat Token 参数<select id="ai-token-parameter"><option value="auto">自动</option><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></select></label>
-      <label class="config-field">最大输出 Token<input id="ai-max-tokens" type="number" min="256" max="65536" step="256" value="8192"></label>
+      <label class="config-field">最大输出 Token<input id="ai-max-tokens" type="number" min="256" max="131072" step="256" value="32768"></label>
+      <label class="config-field">思考深度<select id="ai-reasoning-effort"><option value="auto">自动优化（官方 GLM-5.3 使用 low）</option><option value="provider_default">服务商默认</option><option value="low">low · 较少分析</option><option value="medium">medium · 中等（需模型支持）</option><option value="high">high · 较多分析</option><option value="max">max · 最多分析（需模型支持）</option></select></label>
+      <p class="hint">思考内容可能与标注结果共用输出额度。GLM-5.3 无法关闭思考；低深度可减少分析开销，复杂任务可提高深度。其他模型的自动设置沿用服务商默认。</p>
       <label class="config-field">等待上限（秒）<input id="ai-timeout" type="number" min="5" max="1800" value="600"></label>
       <label class="config-field">发图最长边（像素，0 原尺寸）<input id="ai-image-edge" type="number" min="0" max="8192" step="256" value="2048"></label>
       <label class="hint"><input id="ai-stream" type="checkbox" checked style="width:auto"> 流式接收，显示模型响应进度（不兼容时可关闭）</label>

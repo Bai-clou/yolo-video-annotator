@@ -1,7 +1,7 @@
 // Per-image dialogue and draft state. API keys are never put in browser storage.
 const aiState = {config:null, mode:'manual', busy:false, busyImage:null,
   messages:Object.create(null), pending:Object.create(null), undo:Object.create(null),
-  revisions:Object.create(null), status:Object.create(null), appliedJobs:Object.create(null),
+  revisions:Object.create(null), status:Object.create(null), appliedJobs:Object.create(null), failures:Object.create(null),
   job:null, polling:false, restoring:false};
 
 async function aiAPI(path, body) {
@@ -54,6 +54,7 @@ function updateAIPanel() {
   document.getElementById('ai-undo').disabled=!aiState.undo[name];
   document.getElementById('ai-resume').hidden=!aiState.job || aiState.busy;
   document.getElementById('ai-cancel').hidden=!aiState.job || !aiState.busy;
+  document.getElementById('ai-token-settings').hidden=aiState.failures[name]?.code!=='output_token_limit' || aiState.busy;
   document.getElementById('ai-status').textContent=aiState.status[name] ||
     (aiState.busy && aiState.busyImage!==name ? '正在为另一张图片生成标注；结果只会返回对应图片。' : '');
 }
@@ -76,7 +77,7 @@ async function openAIConfig() {
     aiState.config=await aiAPI('config');
     const config=aiState.config;
     for (const [field,id] of Object.entries({base_url:'base-url',model:'model',protocol:'protocol',auth:'auth',
-      max_tokens:'max-tokens',timeout:'timeout',image_edge:'image-edge',token_parameter:'token-parameter'})) {
+      max_tokens:'max-tokens',timeout:'timeout',image_edge:'image-edge',token_parameter:'token-parameter',reasoning_effort:'reasoning-effort'})) {
       document.getElementById('ai-'+id).value=config[field];
     }
     const key=document.getElementById('ai-key'); key.value='';
@@ -94,7 +95,18 @@ function aiConfigDraft() {
   return {base_url:value('base-url'),model:value('model'),protocol:value('protocol'),auth:value('auth'),
     api_key:value('key'),clear_key:document.getElementById('ai-clear-key').checked,
     max_tokens:Number(value('max-tokens')),timeout:Number(value('timeout')),image_edge:Number(value('image-edge')),
-    token_parameter:value('token-parameter'),stream:document.getElementById('ai-stream').checked};
+    token_parameter:value('token-parameter'),reasoning_effort:value('reasoning-effort'),stream:document.getElementById('ai-stream').checked};
+}
+
+async function openAIOutputSettings() {
+  const failure=aiState.failures[currentName()];
+  await openAIConfig();
+  if (!document.getElementById('ai-config-dialog').open) return;
+  document.querySelector('#ai-config-dialog details').open=true;
+  const field=document.getElementById('ai-max-tokens');
+  field.value=Math.max(Number(field.value),failure?.details?.suggested_max_tokens || 32768);
+  document.getElementById('ai-config-status').textContent='已填入建议额度。请确认思考深度并保存配置，再重新发送原需求；不会自动重发模型请求。';
+  field.focus();
 }
 
 function aiConfigBusy(busy) {
@@ -144,6 +156,7 @@ async function sendAIMessage() {
   const current=structuredClone(state.annotations[name] || []);
   aiState.busy=true; aiState.busyImage=name;
   delete aiState.pending[name];
+  delete aiState.failures[name];
   aiState.status[name]='正在分析当前图片；可继续手工操作，期间修改的草稿不会被自动覆盖。';
   addAIMessage(name,'user',instruction); prompt.value=''; updateAIPanel();
   try {
@@ -172,6 +185,7 @@ async function acknowledgeAIJob(id) {
 function completeAIJob(job, meta) {
   const name=meta.name;
   if (job.status!=='completed' || meta.cancelRequested) {
+    if (job.error_code==='output_token_limit' && !meta.cancelRequested) aiState.failures[name]={code:job.error_code,details:job.error_details};
     aiState.status[name]=job.status==='cancelled' || meta.cancelRequested ? '已停止接收；服务商可能仍在计算或计费，迟到结果不会应用。' : '后台任务未完成，已有标注保持不变。';
     if (job.error) addAIMessage(name,'error',job.error);
     acknowledgeAIJob(job.id);
@@ -284,6 +298,7 @@ function clearAIChat() {
   if (aiState.busy && aiState.busyImage===name) { notice('请等待当前 AI 请求结束后再清空对话。'); return; }
   if (aiState.pending[name]?.job_id) acknowledgeAIJob(aiState.pending[name].job_id);
   delete aiState.messages[name]; delete aiState.status[name]; delete aiState.pending[name];
+  delete aiState.failures[name];
   updateAIPanel();
 }
 

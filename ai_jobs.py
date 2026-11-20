@@ -70,6 +70,8 @@ class JobManager:
                 if not job['_cancel'].is_set():
                     job.update(status='failed', phase='failed',
                                error=str(exception) if isinstance(exception, AIError) else '后台 AI 任务失败，已有标注保持不变')
+                    if getattr(exception, 'code', None) == 'output_token_limit':
+                        job.update(error_code=exception.code, error_details=exception.details)
         finally:
             with self.lock:
                 job['_finished'] = time.monotonic()

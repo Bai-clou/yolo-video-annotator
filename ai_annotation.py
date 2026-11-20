@@ -18,8 +18,8 @@ from video_frames import atomic_json
 
 
 DEFAULTS = {'base_url': '', 'model': '', 'protocol': 'chat_completions',
-            'auth': 'bearer', 'max_tokens': 8192, 'timeout': 600, 'image_edge': 2048,
-            'token_parameter': 'auto', 'stream': True}
+            'auth': 'bearer', 'max_tokens': 32768, 'timeout': 600, 'image_edge': 2048,
+            'token_parameter': 'auto', 'stream': True, 'reasoning_effort': 'auto'}
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_STREAM_BYTES = 32 * 1024 * 1024
 
@@ -32,11 +32,29 @@ class AICancelled(AIError):
     pass
 
 
+class OutputTokenLimit(AIError):
+    code = 'output_token_limit'
+
+    def __init__(self, config=None, analysis_chars=0, received_chars=0):
+        analysis_chars = analysis_chars if type(analysis_chars) is int and analysis_chars >= 0 else 0
+        received_chars = received_chars if type(received_chars) is int and received_chars >= 0 else 0
+        limit = (config or {}).get('max_tokens')
+        suggested = min(131072, max(32768, (limit or 0) * 2))
+        self.details = {'max_tokens': limit, 'suggested_max_tokens': suggested,
+                        'analysis_chars': analysis_chars, 'received_chars': received_chars}
+        message = f'AI 输出被 Token 上限截断（本次上限 {limit}）' if limit else 'AI 输出被 Token 上限截断'
+        if analysis_chars and not received_chars:
+            message += '；本次只收到分析内容，尚未生成标注 JSON'
+        message += '。结果未应用，已有标注保持不变。请到“配置 API → 高级设置”'
+        message += f'把“最大输出 Token”调至 {suggested}，或降低思考深度、分批标注。' if limit != 131072 else '降低思考深度或分批标注，当前已达工具允许的输出上限。'
+        super().__init__(message)
+
+
 def normalize_config(values):
     if not isinstance(values, dict):
         raise AIError('AI 配置需要是对象')
     config = {key: values.get(key, default) for key, default in DEFAULTS.items()}
-    for key in ('base_url', 'model', 'protocol', 'auth', 'token_parameter'):
+    for key in ('base_url', 'model', 'protocol', 'auth', 'token_parameter', 'reasoning_effort'):
         if not isinstance(config[key], str):
             raise AIError(f'{key} 应为文本')
         config[key] = config[key].strip()
@@ -46,6 +64,8 @@ def normalize_config(values):
         raise AIError('不支持的 API Key 请求头类型')
     if config['token_parameter'] not in ('auto', 'max_tokens', 'max_completion_tokens'):
         raise AIError('输出 Token 参数无效')
+    if config['reasoning_effort'] not in ('auto', 'provider_default', 'low', 'medium', 'high', 'max'):
+        raise AIError('思考深度设置无效')
     if any(ord(c) < 32 for c in config['base_url']):
         raise AIError('API 地址不能包含换行或控制字符')
     parts = parse.urlsplit(config['base_url'])
@@ -69,7 +89,7 @@ def normalize_config(values):
         raise AIError('请填写服务商提供的视觉模型名称/模型 ID')
     if type(config['stream']) is not bool:
         raise AIError('流式接收设置应为布尔值')
-    for key, low, high in (('max_tokens', 256, 65536), ('timeout', 5, 1800), ('image_edge', 0, 8192)):
+    for key, low, high in (('max_tokens', 256, 131072), ('timeout', 5, 1800), ('image_edge', 0, 8192)):
         value = config[key]
         if type(value) is not int or not low <= value <= high:
             raise AIError(f'{key} 必须是 {low} 到 {high} 的整数')
@@ -220,9 +240,11 @@ def read_stream(response, protocol, progress, deadline):
             event_data.append(line[5:].lstrip(' '))
     if not finished:
         raise AIError('AI 流式响应提前断开，未收到完整结束事件；已有标注保持不变')
+    stats = {'analysis_chars': analysis, 'received_chars': received}
     if protocol == 'responses':
-        return final
-    return {'choices': [{'finish_reason': reason, 'message': {'content': ''.join(text), 'refusal': refusal}}]}
+        return {**final, '_stream_stats': stats}
+    return {'choices': [{'finish_reason': reason, 'message': {'content': ''.join(text), 'refusal': refusal}}],
+            '_stream_stats': stats}
 
 
 def send_json(config, key, payload, progress=None):
@@ -287,29 +309,48 @@ def image_data(image, edge):
 
 
 def build_payload(config, system, history, prompt, data_url):
+    effort = config.get('reasoning_effort', 'auto')
+    if effort == 'auto':
+        official_glm = (config['protocol'] == 'chat_completions'
+                        and parse.urlsplit(config['base_url']).hostname in ('open.bigmodel.cn', 'api.z.ai')
+                        and re.fullmatch(r'glm-5\.3(?:-flashx?(?:-legal)?)?', config['model'].lower()))
+        effort = 'low' if official_glm else None
+    elif effort == 'provider_default':
+        effort = None
     if config['protocol'] == 'responses':
         contents = [{'role': item['role'], 'content': item['content']} for item in history]
         contents.append({'role': 'user', 'content': [{'type': 'input_text', 'text': prompt},
                                                     {'type': 'input_image', 'image_url': data_url}]})
-        return {'model': config['model'], 'instructions': system, 'input': contents,
+        payload = {'model': config['model'], 'instructions': system, 'input': contents,
                 'max_output_tokens': config['max_tokens'], 'store': False, 'stream': config.get('stream', True)}
+        if effort:
+            payload['reasoning'] = {'effort': effort}
+        return payload
     messages = [{'role': 'system', 'content': system}, *history,
                 {'role': 'user', 'content': [{'type': 'text', 'text': prompt},
                                            {'type': 'image_url', 'image_url': {'url': data_url}}]}]
     token_parameter = config['token_parameter']
     if token_parameter == 'auto':
         token_parameter = 'max_completion_tokens' if parse.urlsplit(config['base_url']).hostname == 'api.openai.com' else 'max_tokens'
-    return {'model': config['model'], 'messages': messages, token_parameter: config['max_tokens'], 'stream': config.get('stream', True)}
+    payload = {'model': config['model'], 'messages': messages, token_parameter: config['max_tokens'], 'stream': config.get('stream', True)}
+    if effort:
+        payload['reasoning_effort'] = effort
+    return payload
 
 
-def response_text(data, protocol):
+def response_text(data, protocol, config=None):
     if not isinstance(data, dict):
         raise AIError('AI 返回的响应结构无效')
     if data.get('error'):
         raise AIError('服务商返回任务错误，请检查模型和额度')
     if protocol == 'responses':
+        incomplete = data.get('incomplete_details')
+        if data.get('status') == 'incomplete' and isinstance(incomplete, dict) and incomplete.get('reason') == 'max_output_tokens':
+            stats = data.get('_stream_stats')
+            stats = stats if isinstance(stats, dict) else {}
+            raise OutputTokenLimit(config, stats.get('analysis_chars', 0), stats.get('received_chars', 0))
         if data.get('status') in ('incomplete', 'failed', 'cancelled'):
-            raise AIError('AI 输出未完成，请增加输出 Token 数或减少单次任务')
+            raise AIError('AI 输出未完成，结果未应用；请检查服务商状态或调整标注需求')
         output = data.get('output') or []
         if not isinstance(output, list):
             raise AIError('Responses 接口的 output 结构无效')
@@ -327,7 +368,13 @@ def response_text(data, protocol):
         if not isinstance(choice, dict):
             raise AIError('Chat Completions 接口的 choice 结构无效')
         if choice.get('finish_reason') in ('length', 'max_tokens'):
-            raise AIError('AI 输出被 Token 上限截断，请增加输出 Token 数')
+            stats = data.get('_stream_stats')
+            stats = stats if isinstance(stats, dict) else {}
+            message = choice.get('message')
+            if not stats and isinstance(message, dict):
+                stats = {'analysis_chars': len(message.get('reasoning_content') or '') if isinstance(message.get('reasoning_content'), str) else 0,
+                         'received_chars': len(message.get('content') or '') if isinstance(message.get('content'), str) else 0}
+            raise OutputTokenLimit(config, stats.get('analysis_chars', 0), stats.get('received_chars', 0))
         message = choice.get('message') or {}
         if not isinstance(message, dict):
             raise AIError('Chat Completions 接口的 message 结构无效')
@@ -414,7 +461,7 @@ def annotate(config, key, path, classes, current, instruction, history, progress
                'sent_image_size': list(sent_size), 'instruction': instruction.strip()}
     payload = build_payload(config, system, history, json.dumps(context, ensure_ascii=False), url)
     started = time.monotonic()
-    text = response_text(send_json(config, key, payload, progress), config['protocol'])
+    text = response_text(send_json(config, key, payload, progress), config['protocol'], config)
     if progress:
         progress({'phase': 'validating'})
     result = parse_result(text, classes, current)
@@ -429,6 +476,6 @@ def test_connection(config, key):
     url, _, _ = image_data(Image.new('RGB', (32, 32), 'white'), 0)
     payload = build_payload(config, '这是视觉 API 连通性测试。请查看图片并用一句简短中文回复。', [], '请简短说明这张测试图的主要颜色。', url)
     started = time.monotonic()
-    text = response_text(send_json(config, key, payload), config['protocol'])
+    text = response_text(send_json(config, key, payload), config['protocol'], config)
     return {'ok': True, 'message': '图片请求已通过；实际框选效果仍需在当前图片上验证。',
             'reply': safe_error_message(text, key), 'elapsed_seconds': round(time.monotonic() - started, 2)}
